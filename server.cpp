@@ -1,24 +1,46 @@
+#include <condition_variable>
 #include <google/protobuf/empty.pb.h>
 #include <grpc++/grpc++.h>
 #include <iostream>
+#include <mutex>
 
 #include "ebs.grpc.pb.h"
-#include "ReaderWriter.h>
+#include "ReaderWriter.h"
+
+// Initial state: BACKUP_NORMAL
+// BACKUP_NORMAL -> INITIALIZING when backup doesn't get heartbeat from primary
+// INITIALIZING -> SINGLE_SERVER when a backup is
+// PRIMARY_NORMAL -> SINGLE_SERVER when the primary can't reach the backup
+// SINGLE_SERVER -> RECOVERING when the primary detects the backup comes up
+// RECOVERING -> PRIMARY_NORMAL when recovery is done
+enum {
+  PRIMARY_NORMAL,
+  BACKUP_NORMAL,
+  SINGLE_SERVER,
+  INITIALIZING,
+  RECOVERING
+} state;
+
+ReaderWriter recovery_lock;
+
+std::mutex state_mutex;
+std::condition_variable state_cv;
 
 void primary_heartbeat_thread() {
   //while thread running
     //send heartBeat rpc to backup
-    //if failed:
-      //backup_status = dead
-      //mode = single_server
-    //else if mode == single_server
-      //backup_status = recovering
-      //send log
-      //if success:
-        //backup_status = ready
-        //mode = primary
-      //else:
-        //backup_status = dead
+    //if state != INITIALIZING
+      //if failed:
+        //state = SINGLE_SERVER
+      //else if state == SINGLE_SERVER
+        //recovery_lock.acquire_write() // exclusive
+        //state = RECOVERING
+        //send log
+        //if success:
+          //state = PRIMARY_NORMAL
+        //else:
+          //state = SINGLE_SERVER
+        //recovery_lock.release_write()
     //sleep
 }
 
@@ -28,11 +50,14 @@ void backup_heartbeat_thread() {
     //sleep(start - last_heartbeat + timeout)
     //if start older than last_heartbeat
       //continue
-    //backup_status = dead
-    //mode = primary
+    //no need to lock state_mutex here because it would be impossible to get past the wait for initialized loop in write before state is set to initialized
+    //state = INITIALIZING
     //start primary_heartbeat_thread
     //stop backup service
     //stop backup_heartbeat_thread
+    //initialize block reader/writer locks
+    //state = SINGLE_SERVER
+    //state_cv.notify_all()
 }
 
 //This is the the client->server part so both primary and backup need to export
@@ -53,9 +78,10 @@ public:
   grpc::Status read (grpc::ServerContext *context,
                     const ebs::ReadReq *request,
                     const ebs::ReadReply *reply) {
-    //if mode == backup
+    //if state == BACKUP_NORMAL
       //return primary primary_address
     //else:
+      //wait until state is not INITIALIZING
       //acquire read lock
       //read data
       //release read lock
@@ -66,20 +92,25 @@ public:
   grpc::Status write (grpc::ServerContext *context,
                       const ebs::WriteReq *request,
                       const ebs::WriteReply *reply) {
-    //if mode == backup
+    //if state == BACKUP_NORMAL
       //return primary primary_address
     //else:
+      //recovery_lock.acquire_read() // shared
+      //wait until state is not INITIALIZING
+      //lock state_mutex
+      //while (state == INITIALIZING)
+        // state_cv.wait(state_mutex);
+      //unlock state_mutex
       //acquire write lock
-      //while backup_status == recovering {}
-      //if backup_status == ready:
+      //if state == PRIMARY_NORMAL
         //send write to backup
         //if failed:
-          //backup_status = dead
-          //mode = single_server
-      //if mode == single_server
+          //state = SINGLE_SERVER
+      //if state = SINGLE_SERVER
         //add write to log
       //write locally
       //release write lock
+      //recovery_lock.release_read()
       //return success
     return grpc::Status::OK;
   }
