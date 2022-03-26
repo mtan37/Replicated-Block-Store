@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include "ebs.grpc.pb.h"
+#include "ReaderWriter.h>
 
 void primary_heartbeat_thread() {
   //while thread running

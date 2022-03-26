@@ -70,7 +70,7 @@ target_link_libraries(ebs
 
 # c++ targets
 foreach(_target server)
-  add_executable(${_target} "${_target}.cpp")
+  add_executable(${_target} "${_target}.cpp" ReaderWriter.cpp)
   target_link_libraries(${_target}
     hw_grpc_proto
   )
