@@ -81,7 +81,10 @@ public:
     //if state == BACKUP_NORMAL
       //return primary primary_address
     //else:
-      //wait until state is not INITIALIZING
+      //lock state_mutex
+      //while (state == INITIALIZING)
+        // state_cv.wait(state_mutex);
+      //unlock state_mutex
       //acquire read lock
       //read data
       //release read lock
@@ -96,7 +99,6 @@ public:
       //return primary primary_address
     //else:
       //recovery_lock.acquire_read() // shared
-      //wait until state is not INITIALIZING
       //lock state_mutex
       //while (state == INITIALIZING)
         // state_cv.wait(state_mutex);
