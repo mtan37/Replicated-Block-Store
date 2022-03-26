@@ -3,6 +3,7 @@
 #include <grpc++/grpc++.h>
 #include <iostream>
 #include <mutex>
+#include <fstream>
 
 #include "ebs.grpc.pb.h"
 #include "ReaderWriter.h"
@@ -58,6 +59,46 @@ void backup_heartbeat_thread() {
     //initialize block reader/writer locks
     //state = SINGLE_SERVER
     //state_cv.notify_all()
+}
+
+int initialize_volume() {
+  std::ifstream volume_exists("volume");
+  if (volume_exists.good()) {
+    volume_exists.close();
+    return 1;
+  } else {
+    std::ofstream volume_create("volume");
+    if (!volume_create.good())
+      return 0;
+    
+    char zero = 0;
+    for (int i = 0; i < 10000; i++)
+      volume_create.write(&zero, sizeof(char));
+  
+    volume_create.close();
+    return 1;
+  }
+}
+
+char* volume_read(int offset) {
+  std::ifstream volume("volume");
+  if (!volume.good())
+    return 0;
+  char* buf = (char*) malloc(4);
+  volume.seekg(offset, std::ios::beg);
+  volume.read(buf, 4);
+  return buf;
+}
+
+//Not sure what type is being sent for data; string, char[], etc?
+int volume_write(const char* data, int offset) {
+  std::fstream volume("volume", std::ios::in | std::ios::out);
+  if (!volume.good())
+    return 0;
+  volume.seekp(offset, std::ios::beg);
+  volume.write(data, 4);
+  volume.close();
+  return 1;
 }
 
 //This is the the client->server part so both primary and backup need to export
