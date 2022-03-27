@@ -2,15 +2,11 @@
 #include <google/protobuf/empty.pb.h>
 #include <grpc++/grpc++.h>
 #include <iostream>
-#include <mutex>
 #include <thread>
-
-#include <arpa/inet.h>
-#include <netdb.h>
 
 #include "ebs.grpc.pb.h"
 #include "ReaderWriter.h"
-
+#include "helper.h"
 
 /*################
 # Constants
@@ -18,7 +14,7 @@
 // Ports to listen on 
 const std::string DEF_SERVER_PORT = "5000";// default port to listen on server service
 const std::string DEF_BACKUP_PORT = "5001";// default port to listen on backup service
-const int HB_LISTEN_TIMEOUT = 8;
+const int HB_FAIL_TIMEOUT = 8;
 const int HB_SEND_TIMEOUT = 2;
 /*################
 # Globals
@@ -46,33 +42,13 @@ ReaderWriter recovery_lock;
 std::mutex state_mutex;
 std::condition_variable state_cv;
 
-/*################
-# Helper Functions
-################*/
-
-void set_time(struct timespec* ts)
-{
-    clock_gettime(CLOCK_MONOTONIC, ts);
-}
-
-double difftimespec_s(const struct timespec before, const struct timespec after)
-{
-    return ((double)after.tv_sec - (double)before.tv_sec);
-}
-
-/*################
-# Run as Primary (client to backup) 
-################*/
-
-
-void primary_heartbeat_thread() {
+void primary_heartbeat_thread(ebs::Backup::Stub *stub) {
   
-  std::cout << "Starting as primary - initiating heartbeat to " << alt_ip << std::endl;
-  //These are for the primary to send RPCs to the backup. They should be null on
-  //the backup.
+  std::cout << "Start operating as - send heartbeat to " << alt_ip << std::endl;
+
   std::shared_ptr<grpc::Channel> channel = 
     grpc::CreateChannel(alt_ip + ":" + DEF_BACKUP_PORT, grpc::InsecureChannelCredentials());
-  std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
+  // std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
 
   google::protobuf::Empty request;
   google::protobuf::Empty reply;
@@ -83,14 +59,15 @@ void primary_heartbeat_thread() {
     // std::cout << "Boopboop\n";
     grpc::Status status = stub->heartBeat(&context, request, &reply);
     if (status.ok()) {
-      std::cout << "(p) BoopBoop\n";      
+      std::cout << "(p) BoopBoop\n"; 
+      sleep(HB_SEND_TIMEOUT);     
     } else {
       if (status.error_code() != 14){
-        std::cout << "...oops\n";
+        std::cout << "...ope\n";
         std::cout << status.error_code() << ": " << status.error_message()
                 << std::endl;        
-      }
-        
+      } 
+      sleep(HB_FAIL_TIMEOUT);  
         //if state != INITIALIZING
           //if failed:
             //state = SINGLE_SERVER
@@ -102,14 +79,31 @@ void primary_heartbeat_thread() {
               //state = PRIMARY_NORMAL
             //else:
               //state = SINGLE_SERVER
-            //recovery_lock.release_write()        
+            //recovery_lock.release_write()    
+                
     }
     
     
     //sleep
-    sleep(HB_SEND_TIMEOUT);
+    
   }    
   std::cout << "Leaving against my will\n";
+}
+
+void backup_heartbeat_thread() {
+  //while thread running
+    //start = now
+    //sleep(start - last_heartbeat + timeout)
+    //if start older than last_heartbeat
+      //continue
+    //no need to lock state_mutex here because it would be impossible to get past the wait for initialized loop in write before state is set to initialized
+    //state = INITIALIZING
+    //start primary_heartbeat_thread
+    //stop backup service
+    //stop backup_heartbeat_thread
+    //initialize block reader/writer locks
+    //state = SINGLE_SERVER
+    //state_cv.notify_all()
 }
 
 /*################
@@ -212,26 +206,15 @@ public:
   listen is shut down if heartbeat fails. When heartbeat fails it spawns  thread
   that runs primary heartbeat.
 */
-void run_as_backup(){
+void run_as_backup(ebs::Backup::Stub *stub){
   // Prepare for heartbeat    
   set_time(&last_heartbeat);     
-  
-  // Setup server, get ready to listen
-  std::cout << "Initializing as Backup Server - listening on " << pb_ip << std::endl;
-  BackupImpl backup;
-  grpc::ServerBuilder builder;
-  builder.AddListeningPort(pb_ip + ":" + DEF_BACKUP_PORT, grpc::InsecureServerCredentials());
-  builder.RegisterService(&backup);
-  // grpc::Server *server = new grpc::Server(builder.BuildAndStart());
-  std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
-  // Start listening on seperate thread  
-  // std::thread backup_server(run_backup_server_thread, server.get());
 
   // start monitoring heartbeat - breaks when heartbeat stops
   // backup_heartbeat_thread();
   double elapsed;
   timespec now;
-
+  int timeout = HB_FAIL_TIMEOUT;
   // Monitor heartbeat 
   //while thread running 
   while (true){     
@@ -241,10 +224,12 @@ void run_as_backup(){
     elapsed = difftimespec_s(last_heartbeat, now);
     if (elapsed<0) elapsed = 0;
     //if start older than last_heartbeat sleep and check again
-    if (elapsed < HB_LISTEN_TIMEOUT){
+
+    if (elapsed < timeout){
       std::cout << "Checking Timeout\n";
       // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
-      sleep(HB_LISTEN_TIMEOUT - elapsed); 
+      sleep(timeout - elapsed); 
+      timeout = HB_FAIL_TIMEOUT;
     } else {
       // Primary has timed out
       std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
@@ -256,10 +241,10 @@ void run_as_backup(){
   // state = INITIALIZING
   state = INITIALIZING;
   // start primary_heartbeat_thread
-  std::thread primary_server(primary_heartbeat_thread);
+  std::thread primary_server(primary_heartbeat_thread, stub);
   
   // stop backup service
-  server->Shutdown();
+  // server->Shutdown();
   // backup_server.join();
   // initialize block reader/writer locks
   // ?? What do I need to do to satisfy above?
@@ -273,10 +258,10 @@ void run_as_backup(){
 }
 
 /**
- * Export server grpc interface. Using deafult port 23338
+ * Export server grpc interface
  */
 void export_server (std::string ip) {
-  std::string my_address = ip + ":23338";
+  std::string my_address = ip + ":" + DEF_SERVER_PORT;
   ServerImpl ebs_server;
 
   grpc::ServerBuilder builder;
@@ -287,19 +272,17 @@ void export_server (std::string ip) {
 }
 
 /**
- * Export backup grpc interface. Using deafult port 23339
+ * Export backup grpc interface
  */
 void export_backup (std::string ip) {
-  std::string my_address = ip + ":23339";
+  std::string my_address = ip + ":" + DEF_SERVER_PORT;
   BackupImpl backup;
 
   grpc::ServerBuilder builder;
   builder.RegisterService(&backup);
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
-
   server->Wait();
 }
-
 
 /*################
 # Main
@@ -332,13 +315,16 @@ int main (int argc, char** argv) {
   state = BACKUP_NORMAL;
 
   // export backup grpc service in a seperate thread
-  // start backup heartbeat
-  // run_as_backup();
+  std::thread backup_service(export_backup, pb_ip);
 
   // export server interface to listen for clients
-  // export_server()
+  std::thread server_service(export_server, pb_ip);
 
-  // client_server.join();
+  // start heartbeat thread(as backup)
+  // This thread monitors for timeout and update state for transition
+  std::thread heartbeat(backup_heartbeat_thread);
+
+  backup_service.join();
+  server_service.join();
   return 0;
-
 }
