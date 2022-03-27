@@ -324,13 +324,9 @@ int parse_args(int argc, char** argv){
         argx = std::string(argv[arg]);
         if (argx == "-alt") {
             alt_sever = std::string(argv[++arg]);            
-        } else if (argx == "-backup") {
-            pb_server = "0.0.0.0:" + std::string(argv[++arg]);
         } else {
-            std::cout << "Usage: prog -alt <alt srvr ip> (default = 0.0.0.0:5001)\n" 
-                      << "            -backup <backup listens on port> (default = 5001)\n";
-
-                return -1;        
+            std::cout << "Usage: prog -alt <alt srvr ip> (default = 0.0.0.0)\n"; 
+            return -1;        
         }                
         arg++;
     }
