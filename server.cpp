@@ -323,7 +323,7 @@ int parse_args(int argc, char** argv){
         if (argc < arg) return 0;
         argx = std::string(argv[arg]);
         if (argx == "-alt") {
-            alt_sever = std::string(argv[++arg]);            
+            alt_sever = std::string(argv[++arg]) + ":" + DEF_PB_PORT;            
         } else {
             std::cout << "Usage: prog -alt <alt srvr ip> (default = 0.0.0.0)\n"; 
             return -1;        
