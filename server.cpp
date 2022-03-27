@@ -15,12 +15,19 @@
 // Ports to listen on 
 const std::string DEF_CS_PORT = "5000";
 const std::string DEF_PB_PORT = "5001";
-const int HB_LISTEN_TIMEOUT = 8;
-const int HB_SEND_TIMEOUT = 2;
+// Timeout on first pass is a little longer to give it time to build cxn
+// Subsequent passes are faster for quicker failure detection
+const int HB_INITIAL_TIMEOUT = 15;
+const int HB_LISTEN_TIMEOUT = 10;
+// Heartbeats are a little faster on fail to help quickly resolve cxn issues
+// but adjustable on send to minimize srvr messages
+const int HB_SEND_TIMEOUT = 4;
+const int HB_FAIL_TIMEOUT = 2;
 /*################
 # Globals
 ################*/
-std::string pb_server = "0.0.0.0:" + DEF_PB_PORT; // IP addr I listen on
+std::string client_server = "0.0.0.0:" + DEF_CS_PORT; // IP addr I listen on as client server
+std::string pb_server = "0.0.0.0:" + DEF_PB_PORT; // IP addr I listen on as backup
 std::string alt_sever = "0.0.0.0:" + DEF_PB_PORT; // IP addr of secondary server
 timespec last_heartbeat; // time last heartbeat received by backup
 
@@ -62,14 +69,12 @@ double difftimespec_s(const struct timespec before, const struct timespec after)
 ################*/
 
 
-void primary_heartbeat_thread() {
+void primary_heartbeat_thread(ebs::Backup::Stub *stub) {
   
   std::cout << "Starting as primary - initiating heartbeat to " << alt_sever << std::endl;
   //These are for the primary to send RPCs to the backup. They should be null on
   //the backup.
-  std::shared_ptr<grpc::Channel> channel = 
-    grpc::CreateChannel(alt_sever, grpc::InsecureChannelCredentials());
-  std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
+  
 
   
   google::protobuf::Empty request;
@@ -81,14 +86,15 @@ void primary_heartbeat_thread() {
     // std::cout << "Boopboop\n";
     grpc::Status status = stub->heartBeat(&context, request, &reply);
     if (status.ok()) {
-      std::cout << "(p) BoopBoop\n";      
+      std::cout << "(p) BoopBoop\n"; 
+      sleep(HB_SEND_TIMEOUT);     
     } else {
       if (status.error_code() != 14){
-        std::cout << "...oops\n";
+        std::cout << "...ope\n";
         std::cout << status.error_code() << ": " << status.error_message()
                 << std::endl;        
-      }
-        
+      } 
+      sleep(HB_FAIL_TIMEOUT);  
         //if state != INITIALIZING
           //if failed:
             //state = SINGLE_SERVER
@@ -100,12 +106,13 @@ void primary_heartbeat_thread() {
               //state = PRIMARY_NORMAL
             //else:
               //state = SINGLE_SERVER
-            //recovery_lock.release_write()        
+            //recovery_lock.release_write()    
+                
     }
     
     
     //sleep
-    sleep(HB_SEND_TIMEOUT);
+    
   }    
   std::cout << "Leaving against my will\n";
 }
@@ -168,7 +175,7 @@ void run_backup_server_thread(grpc::Server *server) {
   listen is shut down if heartbeat fails. When heartbeat fails it spawns  thread
   that runs primary heartbeat.
 */
-void run_as_backup(){
+void run_as_backup(ebs::Backup::Stub *stub){
   // Prepare for heartbeat    
   set_time(&last_heartbeat);     
   
@@ -179,7 +186,7 @@ void run_as_backup(){
   builder.AddListeningPort(pb_server, grpc::InsecureServerCredentials());
   builder.RegisterService(&backup);
   // grpc::Server *server = new grpc::Server(builder.BuildAndStart());
-  std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
+  std::shared_ptr<grpc::Server> server(builder.BuildAndStart());
   // Start listening on seperate thread  
   // std::thread backup_server(run_backup_server_thread, server.get());
   std::thread backup_server(run_backup_server_thread, server.get());
@@ -188,7 +195,7 @@ void run_as_backup(){
   // backup_heartbeat_thread();
   double elapsed;
   timespec now;
-
+  int timeout = HB_INITIAL_TIMEOUT;
   // Monitor heartbeat 
   //while thread running 
   while (true){     
@@ -198,10 +205,12 @@ void run_as_backup(){
     elapsed = difftimespec_s(last_heartbeat, now);
     if (elapsed<0) elapsed = 0;
     //if start older than last_heartbeat sleep and check again
-    if (elapsed < HB_LISTEN_TIMEOUT){
+
+    if (elapsed < timeout){
       std::cout << "Checking Timeout\n";
       // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
-      sleep(HB_LISTEN_TIMEOUT - elapsed); 
+      sleep(timeout - elapsed); 
+      timeout = HB_LISTEN_TIMEOUT;
     } else {
       // Primary has timed out
       std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
@@ -213,7 +222,7 @@ void run_as_backup(){
   // state = INITIALIZING
   state = INITIALIZING;
   // start primary_heartbeat_thread
-  std::thread primary_server(primary_heartbeat_thread);
+  std::thread primary_server(primary_heartbeat_thread, stub);
   
   // stop backup service
   server->Shutdown();
@@ -240,10 +249,16 @@ void run_as_backup(){
 //this. When the backup receives a request on this interface however,
 class ServerImpl final : public ebs::Server::Service {
 private:
-  
+  std::shared_ptr<grpc::Channel> channel;    
+  std::unique_ptr<ebs::Backup::Stub> stub;
 public:
   ServerImpl () {
-    
+    channel = grpc::CreateChannel(alt_sever, grpc::InsecureChannelCredentials());
+    stub = ebs::Backup::NewStub(channel);
+    //mode = backup
+    state = BACKUP_NORMAL;
+    //Run backup    
+    std::thread (run_as_backup, stub.get()).detach();
   }
 
   grpc::Status read (grpc::ServerContext *context,
@@ -296,13 +311,12 @@ public:
 //be on different IPs. However, the Backup service must be on a different port
 //than the Server service running on the same server.
 void run_server () {
-  std::string my_address = "ip:port";
+  std::cout << "Client server is listening on " << client_server << std::endl;
   ServerImpl ebs_server;
-
   grpc::ServerBuilder builder;
+  builder.AddListeningPort(client_server, grpc::InsecureServerCredentials());
   builder.RegisterService(&ebs_server);
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
-
   server->Wait();
 }
 
@@ -318,11 +332,9 @@ void run_server () {
  */
 int parse_args(int argc, char** argv){    
     int arg = 1;
-    std::string argx;
     while (arg < argc){
         if (argc < arg) return 0;
-        argx = std::string(argv[arg]);
-        if (argx == "-alt") {
+        if (std::string(argv[arg]) == "-alt") {
             alt_sever = std::string(argv[++arg]) + ":" + DEF_PB_PORT;            
         } else {
             std::cout << "Usage: prog -alt <alt srvr ip> (default = 0.0.0.0)\n"; 
@@ -336,17 +348,6 @@ int parse_args(int argc, char** argv){
 int main (int argc, char** argv) {
   // Parse any arguments
   if (parse_args(argc, argv) <0) return -1;
-  
-  //mode = backup
-  state = BACKUP_NORMAL;
-
-  // Run server
-  // std::thread client_server(run_server);
-
-  //Run backup    
-  run_as_backup();
-
-  // client_server.join();
+  run_server();  
   return 0;
-
 }
