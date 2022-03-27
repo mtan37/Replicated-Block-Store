@@ -42,68 +42,99 @@ ReaderWriter recovery_lock;
 std::mutex state_mutex;
 std::condition_variable state_cv;
 
-void primary_heartbeat_thread(ebs::Backup::Stub *stub) {
+void start_primary_heartbeat() {
   
   std::cout << "Start operating as - send heartbeat to " << alt_ip << std::endl;
 
+  // initialize the variable needed for grpc heartbeat call
   std::shared_ptr<grpc::Channel> channel = 
     grpc::CreateChannel(alt_ip + ":" + DEF_BACKUP_PORT, grpc::InsecureChannelCredentials());
-  // std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
-
+    std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
   google::protobuf::Empty request;
   google::protobuf::Empty reply;
-  //while thread running
+
   while (true){
-    //send heartBeat rpc to backup.
+
+    std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
     grpc::ClientContext context;  
-    // std::cout << "Boopboop\n";
     grpc::Status status = stub->heartBeat(&context, request, &reply);
-    if (status.ok()) {
+
+    if (state == INITIALIZING) {
+      // don't handle the responses if the servrer is still initializing
+    } else if (status.ok() && state == PRIMARY_NORMAL) {
       std::cout << "(p) BoopBoop\n"; 
-      sleep(HB_SEND_TIMEOUT);     
+    } else if (status.ok() && state == SINGLE_SERVER) {
+      // send log to backup
+      recovery_lock.acquire_write(); // exclusive
+      state = RECOVERING;
+
+      grpc::ClientContext log_context;
+      ebs::ReplayReq log_request;
+      ebs::ReplayReply log_reply;
+      grpc::Status log_status = 
+        stub->replayLog(&log_context, log_request, &log_reply);
+      if (log_status.ok()){
+        state = PRIMARY_NORMAL;
+      } else {
+        state = SINGLE_SERVER;
+      }
+      recovery_lock.release_write();
+
+    } else if (status.error_code() == grpc::UNAVAILABLE) {       
+      state = SINGLE_SERVER;
     } else {
-      if (status.error_code() != 14){
-        std::cout << "...ope\n";
-        std::cout << status.error_code() << ": " << status.error_message()
-                << std::endl;        
-      } 
-      sleep(HB_FAIL_TIMEOUT);  
-        //if state != INITIALIZING
-          //if failed:
-            //state = SINGLE_SERVER
-          //else if state == SINGLE_SERVER
-            //recovery_lock.acquire_write() // exclusive
-            //state = RECOVERING
-            //send log
-            //if success:
-              //state = PRIMARY_NORMAL
-            //else:
-              //state = SINGLE_SERVER
-            //recovery_lock.release_write()    
-                
+      std::cout << "Something unexpected happend. Shuting down the server\n";
+      std::cout << status.error_code() << ": " << status.error_message()
+              << std::endl;  
+      break;
     }
-    
-    
-    //sleep
-    
-  }    
-  std::cout << "Leaving against my will\n";
+
+    sleep(HB_SEND_TIMEOUT);
+  }
+
+  std::cout << "Primary heartbeat call terminate\n";
 }
 
-void backup_heartbeat_thread() {
-  //while thread running
-    //start = now
-    //sleep(start - last_heartbeat + timeout)
-    //if start older than last_heartbeat
-      //continue
-    //no need to lock state_mutex here because it would be impossible to get past the wait for initialized loop in write before state is set to initialized
-    //state = INITIALIZING
-    //start primary_heartbeat_thread
-    //stop backup service
-    //stop backup_heartbeat_thread
-    //initialize block reader/writer locks
-    //state = SINGLE_SERVER
-    //state_cv.notify_all()
+void start_backup_heartbeat(
+  grpc::Server *backup_service,
+  std::thread *backup_service_thread) {
+
+    // start monitoring heartbeat
+    double elapsed;
+    timespec now;
+
+    // Initialize time for last recieved heartbeat    
+    set_time(&last_heartbeat);  
+    while (true){
+      std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
+      
+      set_time(&now);
+      elapsed = difftimespec_s(last_heartbeat, now);
+
+      std::cout << "Checking Timeout\n";
+      if (elapsed < HB_FAIL_TIMEOUT){
+        if (elapsed<0) elapsed = 0;
+        // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
+        sleep(HB_FAIL_TIMEOUT - elapsed); 
+      } else {
+        // Primary has timed out
+        std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
+        break;            
+      }    
+    }
+
+    // Transition into primary state
+    state = INITIALIZING;
+    std::thread primary_server_heartbeat_thread(start_primary_heartbeat);
+    
+    // stop backup service
+    backup_service->Shutdown();
+    backup_service_thread->join();
+    // initialize block reader/writer locks? i don't think this is needed in C++
+    state = SINGLE_SERVER;
+    state_cv.notify_all();
+
+    primary_server_heartbeat_thread.join();
 }
 
 /*################
@@ -115,20 +146,16 @@ public:
   grpc::Status heartBeat (grpc::ServerContext *context,
                           const google::protobuf::Empty *request,
                           google::protobuf::Empty *reply) {
-    //last_heartbeat = now
     std::cout << "(b) BoopBoop" << std::endl;
     set_time(&last_heartbeat);
-    //return success
     return grpc::Status::OK;
   }
 
   grpc::Status write (grpc::ServerContext *context,
                       const ebs::WriteReq *requestt,
                       const ebs::WriteReply *reply) {
-    // update heartbeat
     set_time(&last_heartbeat);
-    //do write
-    //return success
+    // TODO do write
     return grpc::Status::OK;
   }
 
@@ -198,90 +225,36 @@ public:
   }
 };
 
-/**
- Run in backup mode 
- Spawns second thread
-  a. listen on grpc server
-  b. heartbeat
-  listen is shut down if heartbeat fails. When heartbeat fails it spawns  thread
-  that runs primary heartbeat.
-*/
-void run_as_backup(ebs::Backup::Stub *stub){
-  // Prepare for heartbeat    
-  set_time(&last_heartbeat);     
-
-  // start monitoring heartbeat - breaks when heartbeat stops
-  // backup_heartbeat_thread();
-  double elapsed;
-  timespec now;
-  int timeout = HB_FAIL_TIMEOUT;
-  // Monitor heartbeat 
-  //while thread running 
-  while (true){     
-    //start = now        
-    set_time(&now);
-    //sleep(start - last_heartbeat + HB_LISTEN_TIMEOUT)
-    elapsed = difftimespec_s(last_heartbeat, now);
-    if (elapsed<0) elapsed = 0;
-    //if start older than last_heartbeat sleep and check again
-
-    if (elapsed < timeout){
-      std::cout << "Checking Timeout\n";
-      // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
-      sleep(timeout - elapsed); 
-      timeout = HB_FAIL_TIMEOUT;
-    } else {
-      // Primary has timed out
-      std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
-      break;            
-    }    
-  }
-
-  // no need to lock state_mutex here because it would be impossible to get past the wait for initialized loop in write before state is set to initialized
-  // state = INITIALIZING
-  state = INITIALIZING;
-  // start primary_heartbeat_thread
-  std::thread primary_server(primary_heartbeat_thread, stub);
-  
-  // stop backup service
-  // server->Shutdown();
-  // backup_server.join();
-  // initialize block reader/writer locks
-  // ?? What do I need to do to satisfy above?
-  // state = SINGLE_SERVER
-  state = SINGLE_SERVER;
-  // state_cv.notify_all()  
-  // ADD BACK IN state_cv.notify_all();  
-  // Stopped monitoring HB, Shutdown server and stop backup service  
-  // std::thread primary_server(primary_heartbeat_thread);
-  primary_server.join();
+// Run grpc service in a loop
+void run_service(grpc::Server *server, std::string serviceName) {
+  std::cout << "Starting to run " << serviceName << "\n";
+  server->Wait();
 }
 
 /**
  * Export server grpc interface
  */
-void export_server (std::string ip) {
+std::unique_ptr<grpc::Server> export_server (std::string ip) {
   std::string my_address = ip + ":" + DEF_SERVER_PORT;
   ServerImpl ebs_server;
 
   grpc::ServerBuilder builder;
   builder.RegisterService(&ebs_server);
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
-
-  server->Wait();
+  return server;
 }
 
 /**
  * Export backup grpc interface
  */
-void export_backup (std::string ip) {
+std::unique_ptr<grpc::Server> export_backup (std::string ip) {
   std::string my_address = ip + ":" + DEF_SERVER_PORT;
   BackupImpl backup;
 
   grpc::ServerBuilder builder;
   builder.RegisterService(&backup);
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
-  server->Wait();
+  return server;
 }
 
 /*################
@@ -315,16 +288,23 @@ int main (int argc, char** argv) {
   state = BACKUP_NORMAL;
 
   // export backup grpc service in a seperate thread
-  std::thread backup_service(export_backup, pb_ip);
+  grpc::Server *backup_service = export_backup(pb_ip).get();
+  std::string name = "backup";
+  std::thread backup_service_thread(run_service, backup_service, name);
 
   // export server interface to listen for clients
-  std::thread server_service(export_server, pb_ip);
+  grpc::Server *server_service = export_server(pb_ip).get();
+  name = "server";
+  std::thread server_service_thread(run_service, server_service, name);
 
   // start heartbeat thread(as backup)
   // This thread monitors for timeout and update state for transition
-  std::thread heartbeat(backup_heartbeat_thread);
+  std::thread heartbeat(start_backup_heartbeat, backup_service, &backup_service_thread);
 
-  backup_service.join();
-  server_service.join();
+  // heartbeat.join(); 
+  // once hearbeat thread stop, stop service services
+  server_service->Shutdown();
+  server_service_thread.join();
+  
   return 0;
 }
