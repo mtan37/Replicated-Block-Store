@@ -52,15 +52,18 @@ int ebs_read(void *buf, off_t offset) {
           memcpy(buf, reply.data().data(), 4096);
           return EBS_SUCCESS;
         case EBS_NOT_PRIMARY:
-          if (channels[primary_idx]->GetState(true) == GRPC_CHANNEL_TRANSIENT_FAILURE) {
-            primary_idx = (primary_idx + 1) % 2;
-          }
-          else {
-            --i; //try again on same server
-          }
+          primary_idx = (primary_idx + 1) % 2;
           break;
         default:
           return EBS_UNKNOWN_ERROR;
+      }
+    }
+    else {
+      if (channels[primary_idx]->GetState(true) == GRPC_CHANNEL_TRANSIENT_FAILURE) {
+        primary_idx = (primary_idx + 1) % 2;
+      }
+      else {
+        --i; //try again on same server
       }
     }
   }
@@ -90,17 +93,18 @@ int ebs_write(void *buf, off_t offset) {
         case EBS_SUCCESS:
           return EBS_SUCCESS;
         case EBS_NOT_PRIMARY:
-          if (channels[primary_idx]->GetState(true) == GRPC_CHANNEL_TRANSIENT_FAILURE) {
-            primary_idx = (primary_idx + 1) % 2;
-          }
-          else {
-            --i; //try again on same server
-          }
+          primary_idx = (primary_idx + 1) % 2;
           break;
         default:
           return EBS_UNKNOWN_ERROR;
       }
     }
+    if (channels[primary_idx]->GetState(true) == GRPC_CHANNEL_TRANSIENT_FAILURE) {
+        primary_idx = (primary_idx + 1) % 2;
+      }
+      else {
+        --i; //try again on same server
+      }
   }
 
   return EBS_NO_SERVER;
