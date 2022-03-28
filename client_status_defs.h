@@ -5,5 +5,6 @@
 #define EBS_NOT_PRIMARY     1
 #define EBS_UNKNOWN_ERROR   2
 #define EBS_NO_SERVER       3
+#define EBS_VOLUME_ERR      4
 
 #endif

@@ -22,6 +22,10 @@ const std::string DEF_BACKUP_PORT = "18003";// default port to listen on backup 
 const std::string DEF_BACKUP_PORT_ALT = "18004";// TEST
 const int HB_FAIL_TIMEOUT = 8;
 const int HB_SEND_TIMEOUT = 1;
+
+#define NUM_BLOCKS 256 // 1MB volume
+#define BLOCK_SIZE 4096
+
 /*################
 # Globals
 ################*/
@@ -48,6 +52,8 @@ ReaderWriter recovery_lock;
 
 std::mutex state_mutex;
 std::condition_variable state_cv;
+
+ReaderWriter* block_locks;
 
 void start_primary_heartbeat() {
   // initialize the variable needed for grpc heartbeat call
@@ -105,6 +111,7 @@ void start_primary_heartbeat() {
     sleep(HB_SEND_TIMEOUT);
   }
 
+  delete[] block_locks;
   std::cout << "Primary heartbeat call terminate\n";
 }
 
@@ -142,7 +149,9 @@ void start_backup_heartbeat(
     // stop backup service
     backup_service->Shutdown();
     backup_service_thread->join();
-    // initialize block reader/writer locks? i don't think this is needed in C++
+
+    block_locks = new ReaderWriter[NUM_BLOCKS];
+
     state = SINGLE_SERVER;
     state_cv.notify_all();
 
@@ -196,8 +205,10 @@ int initialize_volume() {
       return 0;
     
     char zero = 0;
-    for (int i = 0; i < 10000; i++)
-      volume_create.write(&zero, sizeof(char));
+    char buf[BLOCK_SIZE];
+    memset(buf, 0, BLOCK_SIZE);
+    for (int i = 0; i < NUM_BLOCKS; i++)
+      volume_create.write(buf, BLOCK_SIZE);
   
     volume_create.close();
     return 1;
@@ -208,9 +219,9 @@ char* volume_read(int offset) {
   std::ifstream volume("volume");
   if (!volume.good())
     return 0;
-  char* buf = (char*) malloc(4);
+  char* buf = (char*) malloc(BLOCK_SIZE);
   volume.seekg(offset, std::ios::beg);
-  volume.read(buf, 4);
+  volume.read(buf, BLOCK_SIZE);
   return buf;
 }
 
@@ -220,7 +231,7 @@ int volume_write(const char* data, int offset) {
   if (!volume.good())
     return 0;
   volume.seekp(offset, std::ios::beg);
-  volume.write(data, 4);
+  volume.write(data, BLOCK_SIZE);
   volume.close();
   return 1;
 }
@@ -262,12 +273,33 @@ public:
     }
     state_lock.unlock();
 
-    std::string buf;
-    buf.resize(4096);
-    memset(buf.data(), 0, 4096);
+    long remainder = request->offset()%BLOCK_SIZE;
+    long offset = request->offset();
 
-    reply->set_status(EBS_SUCCESS);
-    reply->set_data(buf);
+    block_locks[offset/BLOCK_SIZE].acquire_read();
+    if (remainder) {
+      block_locks[offset/BLOCK_SIZE + 1].acquire_read();
+    }
+
+    char* buf = volume_read(offset);
+    if (buf == 0) {
+      reply->set_status(EBS_VOLUME_ERR);
+      return grpc::Status::OK;
+    }
+    else {
+      std::string s_buf;
+      s_buf.resize(BLOCK_SIZE);
+      memcpy(s_buf.data(), buf, BLOCK_SIZE);
+      free(buf);
+      reply->set_status(EBS_SUCCESS);
+      reply->set_data(s_buf);
+    }
+
+
+    if (remainder) {
+      block_locks[offset/BLOCK_SIZE + 1].release_read();
+    }
+    block_locks[offset/BLOCK_SIZE].release_read();
 
     return grpc::Status::OK;
   }
@@ -309,6 +341,27 @@ public:
     }
     state_lock.unlock();
 
+    long remainder = request->offset()%BLOCK_SIZE;
+    long offset = request->offset();
+
+    block_locks[offset/BLOCK_SIZE].acquire_write();
+    if (remainder) {
+      block_locks[offset/BLOCK_SIZE + 1].acquire_write();
+    }
+
+    //log or send to backup here
+
+    if (volume_write(request->data().data(), offset) == 0) {
+      reply->set_status(EBS_VOLUME_ERR);
+    }
+    else {
+      reply->set_status(EBS_SUCCESS);
+    }
+
+    if (remainder) {
+      block_locks[offset/BLOCK_SIZE + 1].release_write();
+    }
+    block_locks[offset/BLOCK_SIZE].release_write();
     recovery_lock.release_read();
 
     return grpc::Status::OK;
