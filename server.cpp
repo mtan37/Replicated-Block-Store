@@ -365,9 +365,12 @@ int main (int argc, char** argv) {
   std::thread heartbeat(start_backup_heartbeat, backup_service.get(), &backup_service_thread);
 
   // once hearbeat thread stop, stop service services
-  heartbeat.join(); 
+  heartbeat.join();
+  
+  // Just to be safe(?). Theoretically backup service will be shutdown by the backup thread already. 
   backup_service->Shutdown();
   backup_service_thread.join();
+  
   server_service->Shutdown();
   server_service_thread.join();
   
