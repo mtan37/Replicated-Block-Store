@@ -12,7 +12,7 @@
 
 #include <sys/types.h>
 
-EXTERNC int ebs_init();
+EXTERNC int ebs_init(char*, char*, char*, char*);
 
 // Both read and write use fixed 4096 byte buffer sizes
 EXTERNC int ebs_read(void*, off_t);

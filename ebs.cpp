@@ -15,7 +15,7 @@ static bool initialized = false;
 static size_t primary_idx = 0;
 
 // initialize both channels and stubs
-int ebs_init() {
+int ebs_init(char* ip1, char* port1, char* ip2, char* port2) {
 
   if (initialized) {
     return 0;
@@ -23,8 +23,8 @@ int ebs_init() {
 
   //TODO: probably need some error checking here
   //TODO: read ip addresses and ports from config file
-  channels[0] = grpc::CreateChannel("ip1:port2", grpc::InsecureChannelCredentials());
-  channels[1] = grpc::CreateChannel("ip2:port2", grpc::InsecureChannelCredentials());
+  channels[0] = grpc::CreateChannel(std::string() + ip1 + ":" + port1, grpc::InsecureChannelCredentials());
+  channels[1] = grpc::CreateChannel(std::string() + ip2 + ":" + port2, grpc::InsecureChannelCredentials());
 
   stubs[0] = ebs::Server::NewStub(channels[0]);
   stubs[1] = ebs::Server::NewStub(channels[1]);
