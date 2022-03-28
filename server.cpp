@@ -12,15 +12,19 @@
 # Constants
 ################*/
 // Ports to listen on 
-const std::string DEF_SERVER_PORT = "5000";// default port to listen on server service
-const std::string DEF_BACKUP_PORT = "5001";// default port to listen on backup service
+const std::string DEF_SERVER_PORT = "18001";// default port to listen on server service
+const std::string DEF_SERVER_PORT_ALT = "18002";// TEST
+
+const std::string DEF_BACKUP_PORT = "18003";// default port to listen on backup service
+const std::string DEF_BACKUP_PORT_ALT = "18004";// TEST
 const int HB_FAIL_TIMEOUT = 8;
-const int HB_SEND_TIMEOUT = 2;
+const int HB_SEND_TIMEOUT = 1;
 /*################
 # Globals
 ################*/
 std::string pb_ip = "0.0.0.0"; // IP addr I listen on
 std::string alt_ip = "0.0.0.0"; // IP addr of secondary server
+int is_alt = false; // Variable used for easy local testing...
 timespec last_heartbeat; // time last heartbeat received by backup
 
 // Initial state: BACKUP_NORMAL
@@ -30,11 +34,11 @@ timespec last_heartbeat; // time last heartbeat received by backup
 // SINGLE_SERVER -> RECOVERING when the primary detects the backup comes up
 // RECOVERING -> PRIMARY_NORMAL when recovery is done
 enum {
-  PRIMARY_NORMAL,
-  BACKUP_NORMAL,
-  SINGLE_SERVER,
-  INITIALIZING,
-  RECOVERING
+  PRIMARY_NORMAL = 1,
+  BACKUP_NORMAL = 2,
+  SINGLE_SERVER = 3,
+  INITIALIZING = 4,
+  RECOVERING = 5
 } state;
 
 ReaderWriter recovery_lock;
@@ -43,13 +47,17 @@ std::mutex state_mutex;
 std::condition_variable state_cv;
 
 void start_primary_heartbeat() {
-  
-  std::cout << "Start operating as - send heartbeat to " << alt_ip << std::endl;
-
   // initialize the variable needed for grpc heartbeat call
+  std::string address = alt_ip + ":" + DEF_BACKUP_PORT_ALT;
+  if (is_alt) {
+    address = alt_ip + ":" + DEF_BACKUP_PORT;
+  }
+
+  std::cout << "Start operating as - send heartbeat to " << address << std::endl;
   std::shared_ptr<grpc::Channel> channel = 
-    grpc::CreateChannel(alt_ip + ":" + DEF_BACKUP_PORT, grpc::InsecureChannelCredentials());
-    std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
+      grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
+  
+  std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
   google::protobuf::Empty request;
   google::protobuf::Empty reply;
 
@@ -58,6 +66,7 @@ void start_primary_heartbeat() {
     std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
     grpc::ClientContext context;  
     grpc::Status status = stub->heartBeat(&context, request, &reply);
+    std::cout << "grpc call status is " << status.error_code() << "\n";
 
     if (state == INITIALIZING) {
       // don't handle the responses if the servrer is still initializing
@@ -73,6 +82,7 @@ void start_primary_heartbeat() {
       ebs::ReplayReply log_reply;
       grpc::Status log_status = 
         stub->replayLog(&log_context, log_request, &log_reply);
+      std::cout << "send log grpc call status is " << log_status.error_code() << "\n";
       if (log_status.ok()){
         state = PRIMARY_NORMAL;
       } else {
@@ -100,22 +110,21 @@ void start_backup_heartbeat(
   std::thread *backup_service_thread) {
 
     // start monitoring heartbeat
-    double elapsed;
+    double elapsed = 0;
     timespec now;
+    set_time(&last_heartbeat); 
 
-    // Initialize time for last recieved heartbeat    
-    set_time(&last_heartbeat);  
     while (true){
       std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
       
       set_time(&now);
       elapsed = difftimespec_s(last_heartbeat, now);
 
-      std::cout << "Checking Timeout\n";
+      std::cout << "Checking Timeout: " << elapsed <<"\n";
       if (elapsed < HB_FAIL_TIMEOUT){
-        if (elapsed<0) elapsed = 0;
+        if (elapsed < 0) elapsed = 0;
         // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
-        sleep(HB_FAIL_TIMEOUT - elapsed); 
+        sleep(HB_SEND_TIMEOUT); 
       } else {
         // Primary has timed out
         std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
@@ -153,7 +162,7 @@ public:
 
   grpc::Status write (grpc::ServerContext *context,
                       const ebs::WriteReq *requestt,
-                      const ebs::WriteReply *reply) {
+                      ebs::WriteReply *reply) {
     set_time(&last_heartbeat);
     // TODO do write
     return grpc::Status::OK;
@@ -161,13 +170,14 @@ public:
 
   grpc::Status replayLog (grpc::ServerContext *context,
                           const ebs::ReplayReq *request,
-                          const ebs::ReplayReply *reply) {
+                          ebs::ReplayReply *reply) {
     
     //while more writes:
-      // update heartbeat - here or above?
-      set_time(&last_heartbeat);
-      //do write
+    // update heartbeat
+    set_time(&last_heartbeat);
+    //do write
     //return success
+    std::cout << "get replayLog call \n";
     return grpc::Status::OK;
   }
 };
@@ -184,7 +194,7 @@ public:
 
   grpc::Status read (grpc::ServerContext *context,
                     const ebs::ReadReq *request,
-                    const ebs::ReadReply *reply) {
+                    ebs::ReadReply *reply) {
     //if state == BACKUP_NORMAL
       //return primary primary_address
     //else:
@@ -201,7 +211,7 @@ public:
 
   grpc::Status write (grpc::ServerContext *context,
                       const ebs::WriteReq *request,
-                      const ebs::WriteReply *reply) {
+                      ebs::WriteReply *reply) {
     //if state == BACKUP_NORMAL
       //return primary primary_address
     //else:
@@ -234,12 +244,14 @@ void run_service(grpc::Server *server, std::string serviceName) {
 /**
  * Export server grpc interface
  */
-std::unique_ptr<grpc::Server> export_server (std::string ip) {
+std::unique_ptr<grpc::Server> export_server (std::string ip, ServerImpl *ebs_server) {
   std::string my_address = ip + ":" + DEF_SERVER_PORT;
-  ServerImpl ebs_server;
+  if (is_alt) my_address = ip + ":" + DEF_SERVER_PORT_ALT;
+  std::cout << "server service listening on "  << my_address << "\n";
 
   grpc::ServerBuilder builder;
-  builder.RegisterService(&ebs_server);
+    builder.AddListeningPort(my_address, grpc::InsecureServerCredentials());
+  builder.RegisterService(ebs_server);
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
   return server;
 }
@@ -247,12 +259,14 @@ std::unique_ptr<grpc::Server> export_server (std::string ip) {
 /**
  * Export backup grpc interface
  */
-std::unique_ptr<grpc::Server> export_backup (std::string ip) {
-  std::string my_address = ip + ":" + DEF_SERVER_PORT;
-  BackupImpl backup;
+std::unique_ptr<grpc::Server> export_backup (std::string ip, BackupImpl *backup) {
+  std::string my_address = ip + ":" + DEF_BACKUP_PORT;
+  if (is_alt) my_address = ip + ":" + DEF_BACKUP_PORT_ALT;
+  std::cout << "backup service listening on "  << my_address << "\n";
 
   grpc::ServerBuilder builder;
-  builder.RegisterService(&backup);
+  builder.AddListeningPort(my_address, grpc::InsecureServerCredentials());
+  builder.RegisterService(backup);
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
   return server;
 }
@@ -268,13 +282,18 @@ std::unique_ptr<grpc::Server> export_backup (std::string ip) {
  */
 int parse_args(int argc, char** argv){    
     if (argc < 3) {
-      std::cout << "Usage: prog <pb srvr ip> <alt srvr ip> (default = 0.0.0.0)\n"; 
+      std::cout << "Usage: prog <pb srvr ip> <alt srvr ip> -alt (default = 0.0.0.0)\n"; 
       return -1;
     }
 
     // TODO need to do error checking on the argument
     pb_ip = std::string(argv[1]);
     alt_ip = std::string(argv[2]);
+
+    if (argc >= 4 && std::string(argv[3]).compare("-alt") == 0) {
+      is_alt = true; // used for testing!!
+    }
+    
     return 0;
 }
 
@@ -288,23 +307,28 @@ int main (int argc, char** argv) {
   state = BACKUP_NORMAL;
 
   // export backup grpc service in a seperate thread
-  grpc::Server *backup_service = export_backup(pb_ip).get();
+  BackupImpl backup;
+  std::unique_ptr<grpc::Server> backup_service = export_backup(pb_ip, &backup);
   std::string name = "backup";
-  std::thread backup_service_thread(run_service, backup_service, name);
+  std::thread backup_service_thread(run_service, backup_service.get(), name);
 
   // export server interface to listen for clients
-  grpc::Server *server_service = export_server(pb_ip).get();
+  ServerImpl ebs_server;
+  std::unique_ptr<grpc::Server> server_service = export_server(pb_ip, &ebs_server);
   name = "server";
-  std::thread server_service_thread(run_service, server_service, name);
+  std::thread server_service_thread(run_service, server_service.get(), name);
 
   // start heartbeat thread(as backup)
   // This thread monitors for timeout and update state for transition
-  std::thread heartbeat(start_backup_heartbeat, backup_service, &backup_service_thread);
+  std::thread heartbeat(start_backup_heartbeat, backup_service.get(), &backup_service_thread);
 
-  // heartbeat.join(); 
   // once hearbeat thread stop, stop service services
+  heartbeat.join(); 
+  backup_service->Shutdown();
+  backup_service_thread.join();
   server_service->Shutdown();
   server_service_thread.join();
   
+  std::cout << "TEST: server terminated successfully\n";
   return 0;
 }
