@@ -6,6 +6,7 @@
 #include <mutex>
 #include <fstream>
 
+#include "client_status_defs.h"
 #include "ebs.grpc.pb.h"
 #include "ReaderWriter.h"
 #include "helper.h"
@@ -248,6 +249,26 @@ public:
       //read data
       //release read lock
       //return data
+
+    if (state == BACKUP_NORMAL) {
+      reply->set_status(EBS_NOT_PRIMARY);
+      reply->set_primary(alt_ip + ":" + DEF_BACKUP_PORT_ALT);
+      return grpc::Status::OK;
+    }
+
+    std::unique_lock<std::mutex> state_lock(state_mutex);
+    while (state == INITIALIZING) {
+      state_cv.wait(state_lock);
+    }
+    state_lock.unlock();
+
+    std::string buf;
+    buf.resize(4096);
+    memset(buf.data(), 0, 4096);
+
+    reply->set_status(EBS_SUCCESS);
+    reply->set_data(buf);
+
     return grpc::Status::OK;
   }
 
@@ -273,6 +294,23 @@ public:
       //release write lock
       //recovery_lock.release_read()
       //return success
+
+    if (state == BACKUP_NORMAL) {
+      reply->set_status(EBS_NOT_PRIMARY);
+      reply->set_primary(alt_ip + ":" + DEF_BACKUP_PORT_ALT);
+      return grpc::Status::OK;
+    }
+
+    recovery_lock.acquire_read();
+
+    std::unique_lock<std::mutex> state_lock(state_mutex);
+    while (state == INITIALIZING) {
+      state_cv.wait(state_lock);
+    }
+    state_lock.unlock();
+
+    recovery_lock.release_read();
+
     return grpc::Status::OK;
   }
 };

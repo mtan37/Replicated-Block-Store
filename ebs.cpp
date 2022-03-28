@@ -75,7 +75,7 @@ int ebs_write(void *buf, off_t offset) {
   std::cout << "Write" << std::endl;
 
   std::string s_buf;
-  s_buf.reserve(4096);
+  s_buf.resize(4096);
   memcpy(s_buf.data(), buf, 4096);
 
   ebs::WriteReq request;
