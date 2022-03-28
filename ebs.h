@@ -1,6 +1,8 @@
 #ifndef __EBS_H
 #define __EBS_H
 
+#include "client_status_defs.h"
+
 // Do it this way to make a C/C++ library
 #ifdef __cplusplus
 #define EXTERNC extern "C"
