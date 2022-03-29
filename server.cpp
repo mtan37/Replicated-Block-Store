@@ -98,6 +98,7 @@ int volume_write(const char* data, int offset) {
     return 0;
   volume.seekp(offset, std::ios::beg);
   volume.write(data, BLOCK_SIZE);
+  volume.flush();
   volume.close();
   return 1;
 }
