@@ -55,6 +55,54 @@ std::condition_variable state_cv;
 
 ReaderWriter* block_locks;
 
+std::vector<int> offset_log;
+
+std::shared_ptr<grpc::Channel> channel;
+std::unique_ptr<ebs::Backup::Stub> stub;
+
+int initialize_volume() {
+  std::ifstream volume_exists("volume");
+  if (volume_exists.good()) {
+    volume_exists.close();
+    return 1;
+  } else {
+    std::ofstream volume_create("volume");
+    if (!volume_create.good())
+      return 0;
+    
+    char zero = 0;
+    char buf[BLOCK_SIZE];
+    memset(buf, 0, BLOCK_SIZE);
+    for (int i = 0; i < NUM_BLOCKS; i++)
+      volume_create.write(buf, BLOCK_SIZE);
+  
+    volume_create.close();
+    return 1;
+  }
+}
+
+char* volume_read(int offset) {
+  std::ifstream volume("volume");
+  if (!volume.good())
+    return 0;
+  char* buf = (char*) malloc(BLOCK_SIZE);
+  volume.seekg(offset, std::ios::beg);
+  volume.read(buf, BLOCK_SIZE);
+  return buf;
+}
+
+//Not sure what type is being sent for data; string, char[], etc?
+int volume_write(const char* data, int offset) {
+  std::fstream volume("volume", std::ios::in | std::ios::out);
+  if (!volume.good())
+    return 0;
+  volume.seekp(offset, std::ios::beg);
+  volume.write(data, BLOCK_SIZE);
+  volume.flush();
+  volume.close();
+  return 1;
+}
+
 void start_primary_heartbeat() {
   // initialize the variable needed for grpc heartbeat call
   std::string address = alt_ip + ":" + DEF_BACKUP_PORT_ALT;
@@ -63,10 +111,9 @@ void start_primary_heartbeat() {
   }
 
   std::cout << "Start operating as - send heartbeat to " << address << std::endl;
-  std::shared_ptr<grpc::Channel> channel = 
-      grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
+  channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
   
-  std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
+  stub = ebs::Backup::NewStub(channel);
   google::protobuf::Empty request;
   google::protobuf::Empty reply;
 
@@ -88,12 +135,26 @@ void start_primary_heartbeat() {
 
       grpc::ClientContext log_context;
       ebs::ReplayReq log_request;
+      for (int i : offset_log) {
+        ebs::WriteReq* log_item = log_request.add_item();
+        log_item->set_offset(i);
+        char* buf = volume_read(i);
+        if (buf == 0) {
+          std::cout << "Error reading data for log replay" << std::endl;
+        }
+        std::string s_buf;
+        s_buf.resize(BLOCK_SIZE);
+        memcpy(s_buf.data(), buf, BLOCK_SIZE);
+        free(buf);
+        log_item->set_data(s_buf);
+      }
       ebs::ReplayReply log_reply;
       grpc::Status log_status = 
         stub->replayLog(&log_context, log_request, &log_reply);
       std::cout << "send log grpc call status is " << log_status.error_code() << "\n";
       if (log_status.ok()){
         state = PRIMARY_NORMAL;
+        offset_log.clear();
       } else {
         state = SINGLE_SERVER;
       }
@@ -173,68 +234,50 @@ public:
   }
 
   grpc::Status write (grpc::ServerContext *context,
-                      const ebs::WriteReq *requestt,
+                      const ebs::WriteReq *request,
                       ebs::WriteReply *reply) {
     set_time(&last_heartbeat);
-    // TODO do write
+    std::cout << "GOT WRITE RELAY" << std::endl;
+    long offset = request->offset();
+    
+    if (volume_write(request->data().data(), offset) == 0) {
+      reply->set_status(EBS_VOLUME_ERR);
+    }
+    else {
+      reply->set_status(EBS_SUCCESS);
+    }
+    
     return grpc::Status::OK;
   }
 
   grpc::Status replayLog (grpc::ServerContext *context,
                           const ebs::ReplayReq *request,
                           ebs::ReplayReply *reply) {
-    
-    //while more writes:
     // update heartbeat
     set_time(&last_heartbeat);
-    //do write
+    
+    //while more writes:
+    for (int i = 0; i < request->item_size(); i++) {
+      ebs::WriteReq log_item = request->item(i);
+      //do write
+      std::cout << "GOT WRITE RELAY" << std::endl;
+      long offset = log_item.offset();
+      
+      if (volume_write(log_item.data().data(), offset) == 0) {
+        reply->set_status(EBS_VOLUME_ERR);
+        std::cout << "replayLog write error" << std::endl;
+      }
+    }
+    
+    reply->set_status(EBS_SUCCESS);
+    
     //return success
     std::cout << "get replayLog call \n";
     return grpc::Status::OK;
   }
 };
 
-int initialize_volume() {
-  std::ifstream volume_exists("volume");
-  if (volume_exists.good()) {
-    volume_exists.close();
-    return 1;
-  } else {
-    std::ofstream volume_create("volume");
-    if (!volume_create.good())
-      return 0;
-    
-    char zero = 0;
-    char buf[BLOCK_SIZE];
-    memset(buf, 0, BLOCK_SIZE);
-    for (int i = 0; i < NUM_BLOCKS; i++)
-      volume_create.write(buf, BLOCK_SIZE);
-  
-    volume_create.close();
-    return 1;
-  }
-}
 
-char* volume_read(int offset) {
-  std::ifstream volume("volume");
-  if (!volume.good())
-    return 0;
-  char* buf = (char*) malloc(BLOCK_SIZE);
-  volume.seekg(offset, std::ios::beg);
-  volume.read(buf, BLOCK_SIZE);
-  return buf;
-}
-
-//Not sure what type is being sent for data; string, char[], etc?
-int volume_write(const char* data, int offset) {
-  std::fstream volume("volume", std::ios::in | std::ios::out);
-  if (!volume.good())
-    return 0;
-  volume.seekp(offset, std::ios::beg);
-  volume.write(data, BLOCK_SIZE);
-  volume.close();
-  return 1;
-}
 
 /*################
 # Client-Server communication
@@ -350,7 +393,30 @@ public:
     }
 
     //log or send to backup here
-
+    
+    //Send to backup
+    if (state == PRIMARY_NORMAL) {
+      ebs::WriteReply relay_reply;
+      grpc::ClientContext relay_context;
+      grpc::Status status = stub->write(&relay_context, *request, &relay_reply);
+      std::cout << "WRITE RELAY " << status.ok() << " " << relay_reply.status() << std::endl;
+      
+      if (!status.ok())
+        state = SINGLE_SERVER;
+      else
+        if (relay_reply.status() == EBS_VOLUME_ERR) {
+          reply->set_status(EBS_VOLUME_ERR);
+          goto free_locks;
+        } 
+    }
+    
+    //Send to log
+    if (state == SINGLE_SERVER) {
+      if (std::find(offset_log.begin(), offset_log.end(), offset) == offset_log.end())
+        offset_log.push_back(offset);
+    }
+    
+    //Make local write
     if (volume_write(request->data().data(), offset) == 0) {
       reply->set_status(EBS_VOLUME_ERR);
     }
@@ -358,6 +424,7 @@ public:
       reply->set_status(EBS_SUCCESS);
     }
 
+    free_locks:
     if (remainder) {
       block_locks[offset/BLOCK_SIZE + 1].release_write();
     }
@@ -393,6 +460,7 @@ std::unique_ptr<grpc::Server> export_server (std::string ip, ServerImpl *ebs_ser
  * Export backup grpc interface
  */
 std::unique_ptr<grpc::Server> export_backup (std::string ip, BackupImpl *backup) {
+  initialize_volume();
   std::string my_address = ip + ":" + DEF_BACKUP_PORT;
   if (is_alt) my_address = ip + ":" + DEF_BACKUP_PORT_ALT;
   std::cout << "backup service listening on "  << my_address << "\n";

@@ -35,8 +35,6 @@ int ebs_init(char* ip1, char* port1, char* ip2, char* port2) {
 }
 
 int ebs_read(void *buf, off_t offset) {
-  std::cout << "Read" << std::endl;
-
   ebs::ReadReq request;
   request.set_offset(offset);
 
@@ -72,8 +70,6 @@ int ebs_read(void *buf, off_t offset) {
 }
 
 int ebs_write(void *buf, off_t offset) {
-  std::cout << "Write" << std::endl;
-
   std::string s_buf;
   s_buf.resize(4096);
   memcpy((void*) s_buf.data(), buf, 4096);
