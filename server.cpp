@@ -57,6 +57,9 @@ ReaderWriter* block_locks;
 
 std::vector<int> offset_log;
 
+std::shared_ptr<grpc::Channel> channel;
+std::unique_ptr<ebs::Backup::Stub> stub;
+
 int initialize_volume() {
   std::ifstream volume_exists("volume");
   if (volume_exists.good()) {
@@ -107,10 +110,9 @@ void start_primary_heartbeat() {
   }
 
   std::cout << "Start operating as - send heartbeat to " << address << std::endl;
-  std::shared_ptr<grpc::Channel> channel = 
-      grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
+  channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
   
-  std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
+  stub = ebs::Backup::NewStub(channel);
   google::protobuf::Empty request;
   google::protobuf::Empty reply;
 
@@ -392,15 +394,7 @@ public:
     //log or send to backup here
     
     //Send to backup
-    std::string address = alt_ip + ":" + DEF_BACKUP_PORT_ALT;
-    if (is_alt) {
-      address = alt_ip + ":" + DEF_BACKUP_PORT;
-    }
-
     if (state == PRIMARY_NORMAL) {
-      std::shared_ptr<grpc::Channel> channel = 
-          grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
-      std::unique_ptr<ebs::Backup::Stub> stub(ebs::Backup::NewStub(channel));
       ebs::WriteReply relay_reply;
       grpc::ClientContext relay_context;
       grpc::Status status = stub->write(&relay_context, *request, &relay_reply);
