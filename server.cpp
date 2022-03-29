@@ -19,7 +19,7 @@ const std::string DEF_SERVER_PORT = "18001";// default port to listen on server 
 const std::string DEF_SERVER_PORT_ALT = "18002";// TEST
 
 const std::string DEF_BACKUP_PORT = "18003";// default port to listen on backup service
-const std::string DEF_BACKUP_PORT_ALT = "18004";// TEST
+const std::string DEF_BACKUP_PORT_ALT = "18003";// TEST
 const int HB_FAIL_TIMEOUT = 8;
 const int HB_SEND_TIMEOUT = 1;
 
@@ -289,7 +289,7 @@ public:
     else {
       std::string s_buf;
       s_buf.resize(BLOCK_SIZE);
-      memcpy(s_buf.data(), buf, BLOCK_SIZE);
+      memcpy((void*) s_buf.data(), buf, BLOCK_SIZE);
       free(buf);
       reply->set_status(EBS_SUCCESS);
       reply->set_data(s_buf);

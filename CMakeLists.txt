@@ -76,6 +76,14 @@ foreach(_target server)
   )
 endforeach()
 
+# c++ targets
+foreach(_target client_fail)
+  add_executable(${_target} "${_target}.cpp")
+  target_link_libraries(${_target}
+    ebs
+  )
+endforeach()
+
 # c test targets
 foreach(_target simple_test)
   add_executable(${_target} "${_target}.c")
