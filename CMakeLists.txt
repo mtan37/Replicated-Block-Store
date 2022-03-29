@@ -83,3 +83,7 @@ foreach(_target simple_test single_client_benchmark)
     ebs
   )
 endforeach()
+
+add_executable(fuse_backing backing.c)
+target_include_directories(fuse_backing PUBLIC "/usr/include/fuse3/")
+target_link_libraries(fuse_backing ebs fuse3 pthread)
