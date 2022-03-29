@@ -30,7 +30,7 @@ message WriteReply {
 
 service Backup {
   rpc heartBeat(google.protobuf.Empty) returns (google.protobuf.Empty);
-  rpc write(WriteReq) returns (WriteReq);
+  rpc write(WriteReq) returns (WriteReply);
   rpc replayLog(ReplayReq) returns(ReplayReply);
 }
 
