@@ -47,7 +47,7 @@ static int backing_getattr(const char *path, struct stat *stbuf,
 	stbuf->st_nlink = 1;
 	stbuf->st_uid = getuid();
 	stbuf->st_gid = getgid();
-	stbuf->st_size = (1ULL << 32); /* 4G */
+	stbuf->st_size = (1ULL << 20); /* 1M */
   stbuf->st_blksize = (1ULL << 12); /* 4K */
 	stbuf->st_blocks = 0;
 	stbuf->st_atime = stbuf->st_mtime = stbuf->st_ctime = time(NULL);
