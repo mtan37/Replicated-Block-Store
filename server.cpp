@@ -404,14 +404,14 @@ public:
       ebs::WriteReply relay_reply;
       grpc::ClientContext relay_context;
       grpc::Status status = stub->write(&relay_context, *request, &relay_reply);
-      std::cout << "WRITE RELAY " << status.ok() << " " << reply->status() << std::endl;
+      std::cout << "WRITE RELAY " << status.ok() << " " << relay_reply.status() << std::endl;
       
       if (!status.ok())
         state = SINGLE_SERVER;
       else
-        if (reply->status() == 4) {
+        if (relay_reply.status() == EBS_VOLUME_ERR) {
           reply->set_status(EBS_VOLUME_ERR);
-          return grpc::Status::OK;
+          goto free_locks;
         } 
     }
     
@@ -429,6 +429,7 @@ public:
       reply->set_status(EBS_SUCCESS);
     }
 
+    free_locks:
     if (remainder) {
       block_locks[offset/BLOCK_SIZE + 1].release_write();
     }
