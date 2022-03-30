@@ -242,7 +242,7 @@ public:
                       const ebs::WriteReq *request,
                       ebs::WriteReply *reply) {
     set_time(&last_heartbeat);
-    std::cout << "GOT WRITE RELAY" << std::endl;
+    std::cout << "Backup got write relay" << std::endl;
     long offset = request->offset();
     
     if (volume_write(request->data().data(), offset) == 0) {
@@ -258,6 +258,7 @@ public:
   grpc::Status replayLog (grpc::ServerContext *context,
                           const ebs::ReplayReq *request,
                           ebs::ReplayReply *reply) {
+    std::cout << "Backup got replayLog call \n";
     // update heartbeat
     set_time(&last_heartbeat);
     
@@ -265,9 +266,9 @@ public:
     for (int i = 0; i < request->item_size(); i++) {
       ebs::WriteReq log_item = request->item(i);
       //do write
-      std::cout << "GOT WRITE RELAY" << std::endl;
       long offset = log_item.offset();
-      
+      std::cout << "Replaying log, offset " << offset << std::endl;
+            
       if (volume_write(log_item.data().data(), offset) == 0) {
         reply->set_status(EBS_VOLUME_ERR);
         std::cout << "replayLog write error" << std::endl;
@@ -277,7 +278,6 @@ public:
     reply->set_status(EBS_SUCCESS);
     
     //return success
-    std::cout << "get replayLog call \n";
     return grpc::Status::OK;
   }
 };
@@ -404,7 +404,7 @@ public:
       ebs::WriteReply relay_reply;
       grpc::ClientContext relay_context;
       grpc::Status status = stub->write(&relay_context, *request, &relay_reply);
-      std::cout << "WRITE RELAY " << status.ok() << " " << relay_reply.status() << std::endl;
+      std::cout << "Primary sent write relay" << status.ok() << " " << relay_reply.status() << std::endl;
       
       if (!status.ok())
         state = SINGLE_SERVER;
