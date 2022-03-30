@@ -6,6 +6,7 @@ package ebs;
 service Server {
   rpc read (ReadReq) returns (ReadReply) {}
   rpc write (WriteReq) returns (WriteReply) {}
+  rpc concurrency_write_test (TestConReq) returns (TestConReply) {}
 }
 
 message ReadReq {
@@ -39,5 +40,13 @@ message ReplayReq {
 }
 
 message ReplayReply {
+  int32 status = 1;
+}
+
+message TestConReq {
+  int32 condition = 1;
+}
+
+message TestConReply {
   int32 status = 1;
 }
