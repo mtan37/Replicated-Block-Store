@@ -1,3 +1,5 @@
+//#define GRPC_ARG_MAX_RECONNECT_BACKOFF_MS 1000
+
 #include <condition_variable>
 #include <google/protobuf/empty.pb.h>
 #include <grpc++/grpc++.h>
@@ -111,7 +113,10 @@ void start_primary_heartbeat() {
   }
 
   std::cout << "Start operating as - send heartbeat to " << address << std::endl;
-  channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
+  grpc::ChannelArguments args;
+  args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
+  channel = grpc::CreateCustomChannel(address, grpc::InsecureChannelCredentials(), args);
+  //channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
   
   stub = ebs::Backup::NewStub(channel);
   google::protobuf::Empty request;
