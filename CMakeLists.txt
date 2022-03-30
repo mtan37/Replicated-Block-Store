@@ -34,6 +34,9 @@ set(hw_proto_hdrs "${CMAKE_CURRENT_BINARY_DIR}/ebs.pb.h")
 set(hw_grpc_srcs "${CMAKE_CURRENT_BINARY_DIR}/ebs.grpc.pb.cc")
 set(hw_grpc_hdrs "${CMAKE_CURRENT_BINARY_DIR}/ebs.grpc.pb.h")
 
+# add some gcc compilre flags
+add_compile_options(-D_FILE_OFFSET_BITS=64)
+
 add_custom_command(
       OUTPUT "${hw_proto_srcs}" "${hw_proto_hdrs}" "${hw_grpc_srcs}" "${hw_grpc_hdrs}"
       COMMAND ${_PROTOBUF_PROTOC}
@@ -69,7 +72,7 @@ target_link_libraries(ebs
   ${_PROTOBUF_LIBPROTOBUF})
 
 # c++ targets
-foreach(_target server)
+foreach(_target server concurrency_test)
   add_executable(${_target} "${_target}.cpp" ReaderWriter.cpp helper.cpp)
   target_link_libraries(${_target}
     hw_grpc_proto
@@ -77,13 +80,13 @@ foreach(_target server)
 endforeach()
 
 # c test targets
-foreach(_target simple_test single_client_benchmark)
-  add_executable(${_target} "${_target}.c")
-  target_link_libraries(${_target}
-    ebs
-  )
-endforeach()
+#foreach(_target simple_test single_client_benchmark)
+#  add_executable(${_target} "${_target}.c")
+#  target_link_libraries(${_target}
+#    ebs
+#  )
+#endforeach()
 
-add_executable(fuse_backing backing.c)
-target_include_directories(fuse_backing PUBLIC "/usr/include/fuse3/")
-target_link_libraries(fuse_backing ebs fuse3 pthread)
+#add_executable(fuse_backing backing.c)
+#target_include_directories(fuse_backing PUBLIC "/usr/include/fuse3/")
+#target_link_libraries(fuse_backing ebs fuse3 pthread)
