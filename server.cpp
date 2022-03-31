@@ -12,6 +12,7 @@
 #include "ebs.grpc.pb.h"
 #include "ReaderWriter.h"
 #include "helper.h"
+#include <sys/stat.h>
 
 /*################
 # Constants
@@ -73,13 +74,13 @@ inline void check_offset(char* offset, int16_t code) {
   }
 }
 
-int initialize_volume() {
-  std::ifstream volume_exists("volume");
+int initialize_volume(int block) {
+  std::ifstream volume_exists("volume/" + std::to_string(block));
   if (volume_exists.good()) {
     volume_exists.close();
     return 1;
   } else {
-    std::ofstream volume_create("volume");
+    std::ofstream volume_create("volume/" + std::to_string(block));
     if (!volume_create.good())
       return 0;
     
@@ -95,24 +96,54 @@ int initialize_volume() {
 }
 
 char* volume_read(int offset) {
-  std::ifstream volume("volume");
+  //Reading 1 block
+  int block = offset / 4096;
+  initialize_volume(block);
+  std::ifstream volume("volume/" + std::to_string(block));
   if (!volume.good())
     return 0;
   char* buf = (char*) malloc(BLOCK_SIZE);
-  volume.seekg(offset, std::ios::beg);
-  volume.read(buf, BLOCK_SIZE);
+  volume.seekg(offset % 4096, std::ios::beg);
+  volume.read(buf, BLOCK_SIZE - (offset % 4096));
+  
+  //Reading 2nd block (misaligned)
+  if (offset % 4096 != 0) {
+    int block_extra = (offset / 4096) + 1;
+    initialize_volume(block_extra);
+    std::ifstream volume_extra("volume/" + std::to_string(block_extra));
+    if (!volume_extra.good())
+      return 0;
+    volume_extra.seekg(0, std::ios::beg);
+    volume_extra.read(buf + BLOCK_SIZE - (offset % 4096), offset % 4096);
+  }
+  
   return buf;
 }
 
 //Not sure what type is being sent for data; string, char[], etc?
 int volume_write(const char* data, int offset) {
-  std::fstream volume("volume", std::ios::in | std::ios::out);
+  int block = offset / 4096;
+  initialize_volume(block);
+  std::fstream volume("volume/" + std::to_string(block), std::ios::in | std::ios::out);
   if (!volume.good())
     return 0;
-  volume.seekp(offset, std::ios::beg);
-  volume.write(data, BLOCK_SIZE);
+  volume.seekp(offset % 4096, std::ios::beg);
+  volume.write(data, BLOCK_SIZE - (offset % 4096));
   volume.flush();
   volume.close();
+  
+  if (offset % 4096 != 0) {
+    int block_extra = (offset / 4096) + 1;
+    initialize_volume(block_extra);
+    std::fstream volume_extra("volume/" + std::to_string(block_extra), std::ios::in | std::ios::out);
+    if (!volume_extra.good())
+      return 0;
+    volume_extra.seekp(0, std::ios::beg);
+    volume_extra.write(data + BLOCK_SIZE - (offset % 4096), offset % 4096);
+    volume_extra.flush();
+    volume_extra.close();
+  }
+  
   return 1;
 }
 
@@ -515,7 +546,6 @@ std::unique_ptr<grpc::Server> export_server (std::string ip, ServerImpl *ebs_ser
  * Export backup grpc interface
  */
 std::unique_ptr<grpc::Server> export_backup (std::string ip, BackupImpl *backup) {
-  initialize_volume();
   std::string my_address = ip + ":" + DEF_BACKUP_PORT;
   if (is_alt) my_address = ip + ":" + DEF_BACKUP_PORT_ALT;
   std::cout << "backup service listening on "  << my_address << "\n";
@@ -558,7 +588,9 @@ int main (int argc, char** argv) {
   if (parse_args(argc, argv) <0) return -1;
   std::cout << "TEST: local computer ip " << pb_ip << "\n";
   std::cout << "TEST: alternate computer ip " << alt_ip << "\n";
-
+  
+  mkdir("volume", 0700);
+  
   // server start up as a backup
   state = BACKUP_NORMAL;
 
