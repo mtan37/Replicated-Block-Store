@@ -119,15 +119,15 @@ void start_primary_heartbeat() {
 
   while (true){
 
-    std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
+    // std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
     grpc::ClientContext context;  
     grpc::Status status = stub->heartBeat(&context, request, &reply);
-    std::cout << "grpc call status is " << status.error_code() << "\n";
+    // std::cout << "grpc call status is " << status.error_code() << "\n";
 
     if (state == INITIALIZING) {
       // don't handle the responses if the servrer is still initializing
     } else if (status.ok() && state == PRIMARY_NORMAL) {
-      std::cout << "(p) BoopBoop\n"; 
+      // std::cout << "(p) BoopBoop\n"; 
     } else if (status.ok() && state == SINGLE_SERVER) {
       // send log to backup
       recovery_lock.acquire_write(); // exclusive
@@ -144,7 +144,7 @@ void start_primary_heartbeat() {
         }
         std::string s_buf;
         s_buf.resize(BLOCK_SIZE);
-        memcpy(s_buf.data(), buf, BLOCK_SIZE);
+        memcpy((void *) s_buf.data(), buf, BLOCK_SIZE);
         free(buf);
         log_item->set_data(s_buf);
       }
@@ -186,12 +186,12 @@ void start_backup_heartbeat(
     set_time(&last_heartbeat); 
 
     while (true){
-      std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
+      // std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
       
       set_time(&now);
       elapsed = difftimespec_s(last_heartbeat, now);
 
-      std::cout << "Checking Timeout: " << elapsed <<"\n";
+      // std::cout << "Checking Timeout: " << elapsed <<"\n";
       if (elapsed < HB_FAIL_TIMEOUT){
         if (elapsed < 0) elapsed = 0;
         // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
@@ -228,7 +228,7 @@ public:
   grpc::Status heartBeat (grpc::ServerContext *context,
                           const google::protobuf::Empty *request,
                           google::protobuf::Empty *reply) {
-    std::cout << "(b) BoopBoop" << std::endl;
+    // std::cout << "(b) BoopBoop" << std::endl;
     set_time(&last_heartbeat);
     return grpc::Status::OK;
   }
@@ -303,6 +303,13 @@ public:
       //read data
       //release read lock
       //return data
+
+    printf("\nREAD 2 ON SERVER\n");
+    if (request->crash_server()) {
+      printf("Exiting server?\n");
+      // exit(0);
+      int i = 1/0;
+    }  
 
     if (state == BACKUP_NORMAL) {
       reply->set_status(EBS_NOT_PRIMARY);

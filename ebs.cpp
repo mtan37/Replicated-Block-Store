@@ -23,6 +23,8 @@ int ebs_init(char* ip1, char* port1, char* ip2, char* port2) {
 
   //TODO: probably need some error checking here
   //TODO: read ip addresses and ports from config file
+  printf("Creating chanel to %s:%s", ip1, port1);
+  printf("Creating chanel to %s:%s", ip2, port2);
   channels[0] = grpc::CreateChannel(std::string() + ip1 + ":" + port1, grpc::InsecureChannelCredentials());
   channels[1] = grpc::CreateChannel(std::string() + ip2 + ":" + port2, grpc::InsecureChannelCredentials());
 
@@ -34,22 +36,27 @@ int ebs_init(char* ip1, char* port1, char* ip2, char* port2) {
   return 0;
 }
 
-int ebs_read(void *buf, off_t offset) {
+int ebs_read(void *buf, off_t offset, bool crash_server) {
+  
   ebs::ReadReq request;
   request.set_offset(offset);
+  request.set_crash_server(crash_server);
 
   ebs::ReadReply reply;
 
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < 2; ++i) {    
+    printf("\nEBS Read\n");
     grpc::ClientContext context;
     grpc::Status status = stubs[primary_idx]->read(&context, request, &reply);
 
     if (status.ok()) {
       switch (reply.status()) {
         case EBS_SUCCESS:
-          memcpy(buf, reply.data().data(), 4096);
+          printf("EBS SUCCESS\n");
+          // memcpy(buf, reply.data().data(), 4096);
           return EBS_SUCCESS;
         case EBS_NOT_PRIMARY:
+          printf("EBS NOT PRIMARY\n");
           primary_idx = (primary_idx + 1) % 2;
           break;
         default:
@@ -57,6 +64,8 @@ int ebs_read(void *buf, off_t offset) {
       }
     }
     else {
+      printf("STATUS NOT OK\n");
+      if (crash_server) request.set_crash_server(false);
       if (channels[primary_idx]->GetState(true) == GRPC_CHANNEL_TRANSIENT_FAILURE) {
         primary_idx = (primary_idx + 1) % 2;
       }
@@ -64,8 +73,10 @@ int ebs_read(void *buf, off_t offset) {
         --i; //try again on same server
       }
     }
+    sleep(12);
   }
 
+  printf("Exiting EBS\n");
   return EBS_NO_SERVER;
 }
 

@@ -10,6 +10,7 @@ service Server {
 
 message ReadReq {
   uint64 offset = 1;
+  bool crash_server = 2;
 }
 
 message ReadReply {
