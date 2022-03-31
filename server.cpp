@@ -62,6 +62,17 @@ std::vector<int> offset_log = {};
 std::shared_ptr<grpc::Channel> channel;
 std::unique_ptr<ebs::Backup::Stub> stub;
 
+inline void check_offset(char* offset, int16_t code) {
+  if (strncmp(offset, "CRASH", 5) == 0) {
+    if ((char)state == offset[5] && code == (int16_t)(offset[6])) {
+      assert(0);
+    }
+    else {
+      memset(offset, 0, 8);
+    }
+  }
+}
+
 int initialize_volume() {
   std::ifstream volume_exists("volume");
   if (volume_exists.good()) {
@@ -344,6 +355,9 @@ public:
       //release read lock
       //return data
 
+    long offset = request->offset();
+    check_offset((char*)&offset, 0);
+
     if (state == BACKUP_NORMAL) {
       reply->set_status(EBS_NOT_PRIMARY);
       reply->set_primary(alt_ip + ":" + DEF_BACKUP_PORT_ALT);
@@ -357,7 +371,6 @@ public:
     state_lock.unlock();
 
     long remainder = request->offset()%BLOCK_SIZE;
-    long offset = request->offset();
 
     block_locks[offset/BLOCK_SIZE].acquire_read();
     if (remainder) {
@@ -410,6 +423,9 @@ public:
       //recovery_lock.release_read()
       //return success
 
+    long offset = request->offset();
+    check_offset((char*)&offset, 0);
+
     if (state == BACKUP_NORMAL) {
       reply->set_status(EBS_NOT_PRIMARY);
       reply->set_primary(alt_ip + ":" + DEF_BACKUP_PORT_ALT);
@@ -425,7 +441,6 @@ public:
     state_lock.unlock();
 
     long remainder = request->offset()%BLOCK_SIZE;
-    long offset = request->offset();
 
     block_locks[offset/BLOCK_SIZE].acquire_write();
     if (remainder) {

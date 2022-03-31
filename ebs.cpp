@@ -40,7 +40,7 @@ int ebs_read(void *buf, off_t offset) {
 
   ebs::ReadReply reply;
 
-  for (int i = 0; i < 2; ++i) {
+  while (true) {
     grpc::ClientContext context;
     grpc::Status status = stubs[primary_idx]->read(&context, request, &reply);
 
@@ -60,9 +60,6 @@ int ebs_read(void *buf, off_t offset) {
       if (channels[primary_idx]->GetState(true) == GRPC_CHANNEL_TRANSIENT_FAILURE) {
         primary_idx = (primary_idx + 1) % 2;
       }
-      else {
-        --i; //try again on same server
-      }
     }
   }
 
@@ -80,7 +77,7 @@ int ebs_write(void *buf, off_t offset) {
 
   ebs::WriteReply reply;
 
-  for (int i = 0; i < 2; ++i) {
+  while (true) {
     grpc::ClientContext context;
     grpc::Status status = stubs[primary_idx]->write(&context, request, &reply);
 
@@ -96,11 +93,8 @@ int ebs_write(void *buf, off_t offset) {
       }
     }
     if (channels[primary_idx]->GetState(true) == GRPC_CHANNEL_TRANSIENT_FAILURE) {
-        primary_idx = (primary_idx + 1) % 2;
-      }
-      else {
-        --i; //try again on same server
-      }
+      primary_idx = (primary_idx + 1) % 2;
+    }
   }
 
   return EBS_NO_SERVER;
