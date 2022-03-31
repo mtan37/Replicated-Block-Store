@@ -9,7 +9,7 @@ Project 3 for the distributed system class
   > cmake ..
   > make
   ```
-
+If you installed the cmake locally, please use -DCMAKE_PREFIX_PATH=$MY_INSTALL_DIR
 # Run the project
 
   ```

@@ -72,7 +72,7 @@ int ebs_read(void *buf, off_t offset) {
 int ebs_write(void *buf, off_t offset) {
   std::string s_buf;
   s_buf.resize(4096);
-  memcpy(s_buf.data(), buf, 4096);
+  memcpy(const_cast<char*>(s_buf.data()), buf, 4096);
 
   ebs::WriteReq request;
   request.set_offset(offset);

@@ -149,7 +149,7 @@ void start_primary_heartbeat() {
         }
         std::string s_buf;
         s_buf.resize(BLOCK_SIZE);
-        memcpy(s_buf.data(), buf, BLOCK_SIZE);
+        memcpy(const_cast<char*>(s_buf.data()), buf, BLOCK_SIZE);
         free(buf);
         log_item->set_data(s_buf);
       }
@@ -337,7 +337,7 @@ public:
     else {
       std::string s_buf;
       s_buf.resize(BLOCK_SIZE);
-      memcpy(s_buf.data(), buf, BLOCK_SIZE);
+      memcpy(const_cast<char*>(s_buf.data()), buf, BLOCK_SIZE);
       free(buf);
       reply->set_status(EBS_SUCCESS);
       reply->set_data(s_buf);
