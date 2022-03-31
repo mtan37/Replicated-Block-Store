@@ -105,20 +105,26 @@ int volume_write(const char* data, int offset) {
   return 1;
 }
 
-void start_primary_heartbeat() {
-  // initialize the variable needed for grpc heartbeat call
+/**
+ * Helper function to initialize grpc channel
+ */
+void initialize_grpc_channel() {
   std::string address = alt_ip + ":" + DEF_BACKUP_PORT_ALT;
   if (is_alt) {
     address = alt_ip + ":" + DEF_BACKUP_PORT;
   }
 
-  std::cout << "Start operating as - send heartbeat to " << address << std::endl;
   grpc::ChannelArguments args;
   args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
   channel = grpc::CreateCustomChannel(address, grpc::InsecureChannelCredentials(), args);
-  //channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
-  
   stub = ebs::Backup::NewStub(channel);
+}
+
+void start_primary_heartbeat() {
+  // initialize the variable needed for grpc heartbeat call
+  // channels should already be initialized in the backup heartbeat before heartbeat thread start
+  std::cout << "Start sending out primary heartbeat" << std::endl;
+
   google::protobuf::Empty request;
   google::protobuf::Empty reply;
 
@@ -210,6 +216,7 @@ void start_backup_heartbeat(
 
     // Transition into primary state
     state = INITIALIZING;
+    initialize_grpc_channel();
     std::thread primary_server_heartbeat_thread(start_primary_heartbeat);
     
     // stop backup service
