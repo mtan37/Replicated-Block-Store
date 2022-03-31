@@ -57,7 +57,7 @@ std::condition_variable state_cv;
 
 ReaderWriter* block_locks;
 
-std::vector<int> offset_log;
+std::vector<int> offset_log = {};
 
 std::shared_ptr<grpc::Channel> channel;
 std::unique_ptr<ebs::Backup::Stub> stub;
@@ -144,7 +144,6 @@ void start_primary_heartbeat() {
       recovery_lock.acquire_write(); // exclusive
       state = RECOVERING;
 
-      grpc::ClientContext log_context;
       ebs::ReplayReq log_request;
       for (int i : offset_log) {
         ebs::WriteReq* log_item = log_request.add_item();
@@ -159,16 +158,41 @@ void start_primary_heartbeat() {
         free(buf);
         log_item->set_data(s_buf);
       }
-      ebs::ReplayReply log_reply;
-      grpc::Status log_status = 
-        stub->replayLog(&log_context, log_request, &log_reply);
-      std::cout << "send log grpc call status is " << log_status.error_code() << "\n";
-      if (log_status.ok()){
+
+      // send the log request to backup
+      bool backup_write_success = false;
+      while (!backup_write_success) {
+        grpc::ClientContext log_context;
+        ebs::ReplayReply log_reply;
+
+        grpc::Status log_status = 
+          stub->replayLog(&log_context, log_request, &log_reply);
+        std::cout << "send log grpc call status is " << log_status.error_code() << std::endl;
+
+        if (log_status.ok()){
+
+          // check the status returned by the backup
+          if (log_reply.status() == EBS_SUCCESS) {
+            backup_write_success = true;
+            offset_log.clear();
+          } else {
+            // Backup disk error. This is probably a case that require manual intervention 
+            // TODO not going to handle this for now, just break
+            break;
+          }
+
+        } else {
+          break;
+        }
+
+      }
+
+      if (backup_write_success) {
         state = PRIMARY_NORMAL;
-        offset_log.clear();
       } else {
         state = SINGLE_SERVER;
       }
+
       recovery_lock.release_write();
 
     } else if (status.error_code() == grpc::UNAVAILABLE) {       
@@ -266,6 +290,7 @@ public:
                           const ebs::ReplayReq *request,
                           ebs::ReplayReply *reply) {
     std::cout << "Backup got replayLog call \n";
+
     // update heartbeat
     set_time(&last_heartbeat);
     
@@ -275,10 +300,13 @@ public:
       //do write
       long offset = log_item.offset();
       std::cout << "Replaying log, offset " << offset << std::endl;
+      // update heartbeat again in case the log is really long
+      set_time(&last_heartbeat);
             
       if (volume_write(log_item.data().data(), offset) == 0) {
         reply->set_status(EBS_VOLUME_ERR);
         std::cout << "replayLog write error" << std::endl;
+        return grpc::Status::OK;
       }
     }
     
