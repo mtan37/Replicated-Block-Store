@@ -159,6 +159,7 @@ void start_primary_heartbeat() {
       for (int i : offset_log) {
         ebs::WriteReq* log_item = log_request.add_item();
         log_item->set_offset(i);
+        check_offset((char*)&i, -1);
         char* buf = volume_read(i);
         if (buf == 0) {
           std::cout << "Error reading data for log replay" << std::endl;
@@ -467,8 +468,9 @@ public:
     
     //Send to log
     if (state == SINGLE_SERVER) {
-      if (std::find(offset_log.begin(), offset_log.end(), offset) == offset_log.end())
-        offset_log.push_back(offset);
+      long log_off = request->offset();
+      if (std::find(offset_log.begin(), offset_log.end(), log_off) == offset_log.end())
+        offset_log.push_back(log_off);
     }
     
     //Make local write
