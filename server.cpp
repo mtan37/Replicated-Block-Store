@@ -64,6 +64,8 @@ std::vector<int> offset_log = {};
 std::shared_ptr<grpc::Channel> channel;
 std::unique_ptr<ebs::Backup::Stub> stub;
 
+timespec start, end, singleserver, start_replay, end_replay;
+
 inline void check_offset(char* offset, int16_t code) {
   if (strncmp(offset, "CRASH", 5) == 0) {
     if ((char)state == offset[5] && code == (int16_t)(offset[6])) {
@@ -166,22 +168,22 @@ void initialize_grpc_channel() {
 void start_primary_heartbeat() {
   // initialize the variable needed for grpc heartbeat call
   // channels should already be initialized in the backup heartbeat before heartbeat thread start
-  std::cout << "Start sending out primary heartbeat" << std::endl;
+  //std::cout << "Start sending out primary heartbeat" << std::endl;
 
   google::protobuf::Empty request;
   google::protobuf::Empty reply;
 
   while (true){
 
-    std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
+    //std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
     grpc::ClientContext context;  
     grpc::Status status = stub->heartBeat(&context, request, &reply);
-    std::cout << "grpc call status is " << status.error_code() << "\n";
+    //std::cout << "grpc call status is " << status.error_code() << "\n";
 
     if (state == INITIALIZING) {
       // don't handle the responses if the servrer is still initializing
     } else if (status.ok() && state == PRIMARY_NORMAL) {
-      std::cout << "(p) BoopBoop\n"; 
+      //std::cout << "(p) BoopBoop\n"; 
     } else if (status.ok() && state == SINGLE_SERVER) {
       // send log to backup
       recovery_lock.acquire_write(); // exclusive
@@ -194,7 +196,7 @@ void start_primary_heartbeat() {
         check_offset((char*)&i, -1);
         char* buf = volume_read(i);
         if (buf == 0) {
-          std::cout << "Error reading data for log replay" << std::endl;
+          //std::cout << "Error reading data for log replay" << std::endl;
         }
         std::string s_buf;
         s_buf.resize(BLOCK_SIZE);
@@ -211,7 +213,7 @@ void start_primary_heartbeat() {
 
         grpc::Status log_status = 
           stub->replayLog(&log_context, log_request, &log_reply);
-        std::cout << "send log grpc call status is " << log_status.error_code() << std::endl;
+        //std::cout << "send log grpc call status is " << log_status.error_code() << std::endl;
 
         if (log_status.ok()){
 
@@ -242,7 +244,7 @@ void start_primary_heartbeat() {
     } else if (status.error_code() == grpc::UNAVAILABLE) {       
       state = SINGLE_SERVER;
     } else {
-      std::cout << "Something unexpected happend. Shuting down the server\n";
+      //std::cout << "Something unexpected happend. Shuting down the server\n";
       std::cout << status.error_code() << ": " << status.error_message()
               << std::endl;  
       break;
@@ -252,7 +254,7 @@ void start_primary_heartbeat() {
   }
 
   delete[] block_locks;
-  std::cout << "Primary heartbeat call terminate\n";
+  //std::cout << "Primary heartbeat call terminate\n";
 }
 
 void start_backup_heartbeat(
@@ -268,12 +270,12 @@ void start_backup_heartbeat(
     int timeout = HB_INIT_TIMEOUT;
 
     while (true){
-      std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
+      //std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
       
       set_time(&now);
       elapsed = difftimespec_s(last_heartbeat, now);
 
-      std::cout << "Checking Timeout: " << elapsed <<"\n";
+      //std::cout << "Checking Timeout: " << elapsed <<"\n";
       if (elapsed < timeout){
         if (elapsed < 0) elapsed = 0;
         // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
@@ -281,7 +283,7 @@ void start_backup_heartbeat(
         timeout = HB_FAIL_TIMEOUT;
       } else {
         // Primary has timed out
-        std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
+        //std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
         break;            
       }    
     }
@@ -298,6 +300,10 @@ void start_backup_heartbeat(
     block_locks = new ReaderWriter[NUM_BLOCKS];
 
     state = SINGLE_SERVER;
+    clock_gettime(CLOCK_MONOTONIC, &singleserver);
+    uint64_t diff = 1000000000L * (singleserver.tv_sec - start.tv_sec) + singleserver.tv_nsec - start.tv_nsec;
+    std::cout << "Finished singleserver: " << start.tv_sec << " " << singleserver.tv_sec << " " << diff << std::endl;
+    
     state_cv.notify_all();
 
     primary_server_heartbeat_thread.join();
@@ -312,7 +318,7 @@ public:
   grpc::Status heartBeat (grpc::ServerContext *context,
                           const google::protobuf::Empty *request,
                           google::protobuf::Empty *reply) {
-    std::cout << "(b) BoopBoop" << std::endl;
+    //std::cout << "(b) BoopBoop" << std::endl;
     set_time(&last_heartbeat);
     return grpc::Status::OK;
   }
@@ -321,7 +327,7 @@ public:
                       const ebs::WriteReq *request,
                       ebs::WriteReply *reply) {
     set_time(&last_heartbeat);
-    std::cout << "Backup got write relay" << std::endl;
+    //std::cout << "Backup got write relay" << std::endl;
     long offset = request->offset();
     
     if (volume_write(request->data().data(), offset) == 0) {
@@ -337,7 +343,10 @@ public:
   grpc::Status replayLog (grpc::ServerContext *context,
                           const ebs::ReplayReq *request,
                           ebs::ReplayReply *reply) {
-    std::cout << "Backup got replayLog call \n";
+    clock_gettime(CLOCK_MONOTONIC, &start_replay);  
+    uint64_t diff = 1000000000L * (start_replay.tv_sec - start.tv_sec) + start_replay.tv_nsec - start.tv_nsec;
+    std::cout << "Finished heartbeat, started replaylog: " << diff << std::endl;
+    //std::cout << "Backup got replayLog call \n";
 
     // update heartbeat
     set_time(&last_heartbeat);
@@ -347,18 +356,22 @@ public:
       ebs::WriteReq log_item = request->item(i);
       //do write
       long offset = log_item.offset();
-      std::cout << "Replaying log, offset " << offset << std::endl;
+      //std::cout << "Replaying log, offset " << offset << std::endl;
       // update heartbeat again in case the log is really long
       set_time(&last_heartbeat);
             
       if (volume_write(log_item.data().data(), offset) == 0) {
         reply->set_status(EBS_VOLUME_ERR);
-        std::cout << "replayLog write error" << std::endl;
+        //std::cout << "replayLog write error" << std::endl;
         return grpc::Status::OK;
       }
     }
     
     reply->set_status(EBS_SUCCESS);
+    
+    clock_gettime(CLOCK_MONOTONIC, &end_replay);  
+    diff = 1000000000L * (end_replay.tv_sec - start_replay.tv_sec) + end_replay.tv_nsec - start_replay.tv_nsec;
+    std::cout << "Finished replaylog: " << diff << std::endl;
     
     //return success
     return grpc::Status::OK;
@@ -491,7 +504,7 @@ public:
       ebs::WriteReply relay_reply;
       grpc::ClientContext relay_context;
       grpc::Status status = stub->write(&relay_context, *request, &relay_reply);
-      std::cout << "Primary sent write relay" << status.ok() << " " << relay_reply.status() << std::endl;
+      //std::cout << "Primary sent write relay" << status.ok() << " " << relay_reply.status() << std::endl;
       
       if (!status.ok())
         state = SINGLE_SERVER;
@@ -530,7 +543,7 @@ public:
 
 // Run grpc service in a loop
 void run_service(grpc::Server *server, std::string serviceName) {
-  std::cout << "Starting to run " << serviceName << "\n";
+  //std::cout << "Starting to run " << serviceName << "\n";
   server->Wait();
 }
 
@@ -540,7 +553,7 @@ void run_service(grpc::Server *server, std::string serviceName) {
 std::unique_ptr<grpc::Server> export_server (std::string ip, ServerImpl *ebs_server) {
   std::string my_address = ip + ":" + DEF_SERVER_PORT;
   if (is_alt) my_address = ip + ":" + DEF_SERVER_PORT_ALT;
-  std::cout << "server service listening on "  << my_address << "\n";
+  //std::cout << "server service listening on "  << my_address << "\n";
 
   grpc::ServerBuilder builder;
     builder.AddListeningPort(my_address, grpc::InsecureServerCredentials());
@@ -555,7 +568,7 @@ std::unique_ptr<grpc::Server> export_server (std::string ip, ServerImpl *ebs_ser
 std::unique_ptr<grpc::Server> export_backup (std::string ip, BackupImpl *backup) {
   std::string my_address = ip + ":" + DEF_BACKUP_PORT;
   if (is_alt) my_address = ip + ":" + DEF_BACKUP_PORT_ALT;
-  std::cout << "backup service listening on "  << my_address << "\n";
+  //std::cout << "backup service listening on "  << my_address << "\n";
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort(my_address, grpc::InsecureServerCredentials());
@@ -575,7 +588,7 @@ std::unique_ptr<grpc::Server> export_backup (std::string ip, BackupImpl *backup)
  */
 int parse_args(int argc, char** argv){    
     if (argc < 3) {
-      std::cout << "Usage: prog <pb srvr ip> <alt srvr ip> -alt (default = 0.0.0.0)\n"; 
+      //std::cout << "Usage: prog <pb srvr ip> <alt srvr ip> -alt (default = 0.0.0.0)\n"; 
       return -1;
     }
 
@@ -591,10 +604,12 @@ int parse_args(int argc, char** argv){
 }
 
 int main (int argc, char** argv) {
+
+  clock_gettime(CLOCK_MONOTONIC, &start);
   // Parse any arguments to get ip address of the other server
   if (parse_args(argc, argv) <0) return -1;
-  std::cout << "TEST: local computer ip " << pb_ip << "\n";
-  std::cout << "TEST: alternate computer ip " << alt_ip << "\n";
+  //std::cout << "TEST: local computer ip " << pb_ip << "\n";
+  //std::cout << "TEST: alternate computer ip " << alt_ip << "\n";
   
   mkdir("volume", 0700);
   
@@ -616,6 +631,10 @@ int main (int argc, char** argv) {
   // start heartbeat thread(as backup)
   // This thread monitors for timeout and update state for transition
   std::thread heartbeat(start_backup_heartbeat, backup_service.get(), &backup_service_thread);
+
+  clock_gettime(CLOCK_MONOTONIC, &end);  
+  uint64_t diff = 1000000000L * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
+  std::cout << "Launched threads: " << diff << std::endl;
 
   // once hearbeat thread stop, stop service services
   heartbeat.join();
