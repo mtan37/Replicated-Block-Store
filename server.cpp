@@ -408,10 +408,16 @@ public:
     state_lock.unlock();
 
     long remainder = request->offset()%BLOCK_SIZE;
+    long block_num = (offset/BLOCK_SIZE) % NUM_BLOCKS;
+    long next_block = block_num + 1;
+    if (next_block == NUM_BLOCKS) {
+      next_block = block_num;
+      block_num = 0; // acquire the lower number block lock first
+    }
 
-    block_locks[offset/BLOCK_SIZE].acquire_read();
+    block_locks[block_num].acquire_read();
     if (remainder) {
-      block_locks[offset/BLOCK_SIZE + 1].acquire_read();
+      block_locks[next_block].acquire_read();
     }
 
     char* buf = volume_read(offset);
@@ -430,9 +436,9 @@ public:
 
 
     if (remainder) {
-      block_locks[offset/BLOCK_SIZE + 1].release_read();
+      block_locks[next_block].release_read();
     }
-    block_locks[offset/BLOCK_SIZE].release_read();
+    block_locks[block_num].release_read();
 
     return grpc::Status::OK;
   }
@@ -478,10 +484,16 @@ public:
     state_lock.unlock();
 
     long remainder = request->offset()%BLOCK_SIZE;
+    long block_num = (offset/BLOCK_SIZE) % NUM_BLOCKS;
+    long next_block = block_num + 1;
+    if (next_block == NUM_BLOCKS) {
+      next_block = block_num;
+      block_num = 0; // acquire the lower number block lock first
+    }
 
-    block_locks[offset/BLOCK_SIZE].acquire_write();
+    block_locks[block_num].acquire_write();
     if (remainder) {
-      block_locks[offset/BLOCK_SIZE + 1].acquire_write();
+      block_locks[next_block].acquire_write();
     }
 
     //log or send to backup here
@@ -519,9 +531,9 @@ public:
 
     free_locks:
     if (remainder) {
-      block_locks[offset/BLOCK_SIZE + 1].release_write();
+      block_locks[next_block].release_write();
     }
-    block_locks[offset/BLOCK_SIZE].release_write();
+    block_locks[block_num].release_write();
     recovery_lock.release_read();
 
     return grpc::Status::OK;
