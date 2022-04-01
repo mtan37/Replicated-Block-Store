@@ -57,8 +57,24 @@ int main(int argc, char** argv) {
     write_latency
   );
 
+  int unaligned_write_latency = 0;
+  for (int i = 0; i < 4096; ++i) {
+    write_buf[i] = i%256;
+  }
+  DO_TRIALS(
+    {offset = ((offset + 4096) + 10) % (1024*1024);},
+    {
+      if (ebs_write(write_buf, offset) != EBS_SUCCESS) {
+        return 1;
+      }
+    },
+    iterations,
+    unaligned_write_latency
+  );
+
   print_result("Read latency", read_latency);
-  print_result("Write latency", write_latency);
+  print_result("Aligned write latency", write_latency);
+  print_result("Unaligned Write latency", unaligned_write_latency);
 
   return 0;
 }
