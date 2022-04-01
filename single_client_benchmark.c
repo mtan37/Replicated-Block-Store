@@ -42,10 +42,14 @@ int main(int argc, char** argv) {
   );
 
   int write_latency = 0;
+  char write_buf[4096];
+  for (int i = 0; i < 4096; ++i) {
+    write_buf[i] = i%256;
+  }
   DO_TRIALS(
     {offset = (offset + 4096) % (1024*1024);},
     {
-      if (ebs_read(buf, offset) != EBS_SUCCESS) {
+      if (ebs_write(write_buf, offset) != EBS_SUCCESS) {
         return 1;
       }
     },
