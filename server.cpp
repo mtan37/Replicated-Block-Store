@@ -23,7 +23,8 @@ const std::string DEF_SERVER_PORT_ALT = "18002";// TEST
 
 const std::string DEF_BACKUP_PORT = "18003";// default port to listen on backup service
 const std::string DEF_BACKUP_PORT_ALT = "18004";// TEST
-const int HB_FAIL_TIMEOUT = 8;
+const int HB_INIT_TIMEOUT = 8;
+const int HB_FAIL_TIMEOUT = 2;
 const int HB_SEND_TIMEOUT = 1;
 
 #define NUM_BLOCKS 256 // 1MB volume
@@ -263,6 +264,9 @@ void start_backup_heartbeat(
     timespec now;
     set_time(&last_heartbeat); 
 
+    // Want larger timeout on init then rest of time
+    int timeout = HB_INIT_TIMEOUT;
+
     while (true){
       std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
       
@@ -270,7 +274,7 @@ void start_backup_heartbeat(
       elapsed = difftimespec_s(last_heartbeat, now);
 
       std::cout << "Checking Timeout: " << elapsed <<"\n";
-      if (elapsed < HB_FAIL_TIMEOUT){
+      if (elapsed < timeout){
         if (elapsed < 0) elapsed = 0;
         // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
         sleep(HB_SEND_TIMEOUT); 
@@ -279,6 +283,7 @@ void start_backup_heartbeat(
         std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
         break;            
       }    
+      timeout = HB_FAIL_TIMEOUT;
     }
 
     // Transition into primary state
