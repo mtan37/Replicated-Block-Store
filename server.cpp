@@ -277,13 +277,13 @@ void start_backup_heartbeat(
       if (elapsed < timeout){
         if (elapsed < 0) elapsed = 0;
         // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
-        sleep(HB_SEND_TIMEOUT); 
+        sleep(timeout); 
+        timeout = HB_FAIL_TIMEOUT;
       } else {
         // Primary has timed out
         std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
         break;            
       }    
-      timeout = HB_FAIL_TIMEOUT;
     }
 
     // Transition into primary state
