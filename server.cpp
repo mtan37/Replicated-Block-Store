@@ -173,15 +173,15 @@ void start_primary_heartbeat() {
 
   while (true){
 
-    std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
+    // std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
     grpc::ClientContext context;  
     grpc::Status status = stub->heartBeat(&context, request, &reply);
-    std::cout << "grpc call status is " << status.error_code() << "\n";
+    // std::cout << "grpc call status is " << status.error_code() << "\n";
 
     if (state == INITIALIZING) {
       // don't handle the responses if the servrer is still initializing
     } else if (status.ok() && state == PRIMARY_NORMAL) {
-      std::cout << "(p) BoopBoop\n"; 
+      // std::cout << "(p) BoopBoop\n"; 
     } else if (status.ok() && state == SINGLE_SERVER) {
       // send log to backup
       recovery_lock.acquire_write(); // exclusive
@@ -194,7 +194,7 @@ void start_primary_heartbeat() {
         check_offset((char*)&i, -1);
         char* buf = volume_read(i);
         if (buf == 0) {
-          std::cout << "Error reading data for log replay" << std::endl;
+          // std::cout << "Error reading data for log replay" << std::endl;
         }
         std::string s_buf;
         s_buf.resize(BLOCK_SIZE);
@@ -211,7 +211,7 @@ void start_primary_heartbeat() {
 
         grpc::Status log_status = 
           stub->replayLog(&log_context, log_request, &log_reply);
-        std::cout << "send log grpc call status is " << log_status.error_code() << std::endl;
+        // std::cout << "send log grpc call status is " << log_status.error_code() << std::endl;
 
         if (log_status.ok()){
 
@@ -268,7 +268,7 @@ void start_backup_heartbeat(
     int timeout = HB_INIT_TIMEOUT;
 
     while (true){
-      std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
+      //  std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
       
       set_time(&now);
       elapsed = difftimespec_s(last_heartbeat, now);
@@ -281,7 +281,7 @@ void start_backup_heartbeat(
         timeout = HB_FAIL_TIMEOUT;
       } else {
         // Primary has timed out
-        std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
+        // std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
         break;            
       }    
     }
@@ -312,7 +312,7 @@ public:
   grpc::Status heartBeat (grpc::ServerContext *context,
                           const google::protobuf::Empty *request,
                           google::protobuf::Empty *reply) {
-    std::cout << "(b) BoopBoop" << std::endl;
+    // std::cout << "(b) BoopBoop" << std::endl;
     set_time(&last_heartbeat);
     return grpc::Status::OK;
   }
@@ -321,7 +321,7 @@ public:
                       const ebs::WriteReq *request,
                       ebs::WriteReply *reply) {
     set_time(&last_heartbeat);
-    std::cout << "Backup got write relay" << std::endl;
+    // std::cout << "Backup got write relay" << std::endl;
     long offset = request->offset();
     
     if (volume_write(request->data().data(), offset) == 0) {
@@ -337,7 +337,7 @@ public:
   grpc::Status replayLog (grpc::ServerContext *context,
                           const ebs::ReplayReq *request,
                           ebs::ReplayReply *reply) {
-    std::cout << "Backup got replayLog call \n";
+    // std::cout << "Backup got replayLog call \n";
 
     // update heartbeat
     set_time(&last_heartbeat);
@@ -347,7 +347,7 @@ public:
       ebs::WriteReq log_item = request->item(i);
       //do write
       long offset = log_item.offset();
-      std::cout << "Replaying log, offset " << offset << std::endl;
+      // std::cout << "Replaying log, offset " << offset << std::endl;
       // update heartbeat again in case the log is really long
       set_time(&last_heartbeat);
             
@@ -503,7 +503,7 @@ public:
       ebs::WriteReply relay_reply;
       grpc::ClientContext relay_context;
       grpc::Status status = stub->write(&relay_context, *request, &relay_reply);
-      std::cout << "Primary sent write relay" << status.ok() << " " << relay_reply.status() << std::endl;
+      // std::cout << "Primary sent write relay" << status.ok() << " " << relay_reply.status() << std::endl;
       
       if (!status.ok())
         state = SINGLE_SERVER;
@@ -605,8 +605,8 @@ int parse_args(int argc, char** argv){
 int main (int argc, char** argv) {
   // Parse any arguments to get ip address of the other server
   if (parse_args(argc, argv) <0) return -1;
-  std::cout << "TEST: local computer ip " << pb_ip << "\n";
-  std::cout << "TEST: alternate computer ip " << alt_ip << "\n";
+  // std::cout << "TEST: local computer ip " << pb_ip << "\n";
+  // std::cout << "TEST: alternate computer ip " << alt_ip << "\n";
   
   mkdir("volume", 0700);
   
