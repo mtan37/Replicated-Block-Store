@@ -84,6 +84,14 @@ foreach(_target simple_test simple_test_crash single_client_benchmark continuous
   )
 endforeach()
 
+# c++ test targets
+foreach(_target availability_test_crash)
+  add_executable(${_target} "${_target}.cpp" helper.cpp)
+  target_link_libraries(${_target}
+    ebs
+  )
+endforeach()
+
 add_executable(fuse_backing backing.c)
 target_include_directories(fuse_backing PUBLIC "/usr/include/fuse3/")
 target_link_libraries(fuse_backing ebs fuse3 pthread)

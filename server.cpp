@@ -156,6 +156,7 @@ void initialize_grpc_channel() {
   if (is_alt) {
     address = alt_ip + ":" + DEF_BACKUP_PORT;
   }
+  std::cout << "Primary starting to send heatbeat to " << address << std::endl;
 
   grpc::ChannelArguments args;
   args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
@@ -323,6 +324,7 @@ public:
     set_time(&last_heartbeat);
     std::cout << "Backup got write relay" << std::endl;
     long offset = request->offset();
+    check_offset((char*)&offset, 0);
     
     if (volume_write(request->data().data(), offset) == 0) {
       reply->set_status(EBS_VOLUME_ERR);
