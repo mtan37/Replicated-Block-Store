@@ -273,7 +273,7 @@ void start_backup_heartbeat(
       set_time(&now);
       elapsed = difftimespec_s(last_heartbeat, now);
 
-      std::cout << "Checking Timeout: " << elapsed <<"\n";
+      // std::cout << "Checking Timeout: " << elapsed <<"\n";
       if (elapsed < timeout){
         if (elapsed < 0) elapsed = 0;
         // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
