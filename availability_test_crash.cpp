@@ -1,12 +1,27 @@
 #include <stdio.h>
-
+#include <iostream>
+#include "helper.h"
 #include "ebs.h"
 
+
+/*  
+  Show availability and impacts
+  a. normal write\read
+  b. write\primary failure\read
+  c. write\backup failure\read
+*/
 int main() {
-  ebs_init("10.10.1.2", "18001", "10.10.1.3", "18002");
+  char ip[] = "10.10.1.2";
+  char port[] = "18001";
+  char alt_ip[] = "10.10.1.3";
+  char alt_port[] = "18002";
+  
+  ebs_init(ip, port, alt_ip, alt_port);
 
   char code[] = {'C', 'R', 'A', 'S', 'H', 1, 0, 0};
 
+  timespec start, end;
+  set_time(&start); 
   char write_buf[4096];
   for (int i = 0; i < 4096; ++i) {
     write_buf[i] = i%256;
@@ -31,6 +46,10 @@ int main() {
       return 0;
     }
   }
-  printf("Test passed\n");
+
+  set_time(&end); 
+  double elapsed = difftimespec_ns(start, end);
+  printf("Test passed - it took %f (s) \n", elapsed*1e-9);
+  
   return 0;
 }

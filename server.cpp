@@ -156,6 +156,7 @@ void initialize_grpc_channel() {
   if (is_alt) {
     address = alt_ip + ":" + DEF_BACKUP_PORT;
   }
+  std::cout << "Primary starting to send heatbeat to " << address << std::endl;
 
   grpc::ChannelArguments args;
   args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
