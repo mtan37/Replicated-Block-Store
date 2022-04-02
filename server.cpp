@@ -87,7 +87,7 @@ int copy_file(std::string copy_path, std::string temp_path){
     fd = ::open(copy_path.c_str(), O_RDONLY, 0777);
     if (fd < 0){return -1;}
     // get copy file deets and write to string
-    int length = lseek(fd, 0, SEEK_END);
+    int length = 4096;
     if (length<0){return -1;}
     if (lseek(fd, 0, SEEK_SET) < 0) {return -1;}
     char *pChars = new char[length];
@@ -100,7 +100,7 @@ int copy_file(std::string copy_path, std::string temp_path){
     fd = ::open(temp_path.c_str(), O_CREAT | O_WRONLY | O_SYNC, 0777);
     if (fd < 0){return -1;}
     // Write to temp file and close
-    if (write(fd, pChars, strlen(pChars)) < 0){
+    if (write(fd, pChars, length) < 0){
         ::close(fd);
         return -1;
     }
@@ -126,7 +126,7 @@ std::string get_time_str(){
 */
 std::string get_temp_path(std::string userpath){
     // add current timestamp to name
-    userpath = userpath + get_time_str();
+    userpath = userpath + "_tmp_" + get_time_str();
     // std::cout << "Temp path : " << userpath << std::endl;
     return userpath;
 }
@@ -144,8 +144,7 @@ int initialize_volume(int block) {
     char zero = 0;
     char buf[BLOCK_SIZE];
     memset(buf, 0, BLOCK_SIZE);
-    for (int i = 0; i < NUM_BLOCKS; i++)
-      volume_create.write(buf, BLOCK_SIZE);
+    volume_create.write(buf, BLOCK_SIZE);
   
     volume_create.close();
     return 1;
