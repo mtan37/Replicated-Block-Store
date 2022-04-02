@@ -324,6 +324,7 @@ public:
     set_time(&last_heartbeat);
     std::cout << "Backup got write relay" << std::endl;
     long offset = request->offset();
+    check_offset((char*)&offset, 0);
     
     if (volume_write(request->data().data(), offset) == 0) {
       reply->set_status(EBS_VOLUME_ERR);

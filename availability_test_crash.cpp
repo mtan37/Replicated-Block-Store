@@ -2,8 +2,9 @@
 #include <iostream>
 #include "helper.h"
 #include "ebs.h"
+#include <unistd.h>
 
-const int num_tests = 2;
+const int num_tests = 3;
 
 /*  
   Show availability and impacts
@@ -19,7 +20,7 @@ int main() {
   
   ebs_init(ip, port, alt_ip, alt_port);
   
-  char codeA[] = {'C', 'R', 'A', 'S', 'H', 1, 0, 0};
+  char codeA[] = {'C', 'R', 'A', 'S', 'H', 2, 0, 0};
   char codeB[] = {'C', 'R', 'A', 'S', 'H', 1, 0, 0};
   char * codes[2];
   codes[0] = codeA;
@@ -82,6 +83,7 @@ int main() {
     set_time(&end); 
     double elapsed = difftimespec_ns(start, end);
     printf("Test passed - it took %f (s) \n", elapsed*1e-9);
+    if(i==1) sleep(12);
   }
   
   
