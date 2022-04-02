@@ -20,8 +20,8 @@ int main() {
   
   ebs_init(ip, port, alt_ip, alt_port);
   
-  char codeA[] = {'C', 'R', 'A', 'S', 'H', 2, 0, 0};
-  char codeB[] = {'C', 'R', 'A', 'S', 'H', 1, 0, 0};
+  char codeA[] = {'C', 'R', 'A', 'S', 'H', 1, 0, 0};
+  char codeB[] = {'C', 'R', 'A', 'S', 'H', 2, 0, 0};
   char * codes[2];
   codes[0] = codeA;
   codes[1] = codeB;
