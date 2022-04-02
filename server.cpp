@@ -191,7 +191,7 @@ void start_primary_heartbeat() {
       for (int i : offset_log) {
         ebs::WriteReq* log_item = log_request.add_item();
         log_item->set_offset(i);
-        check_offset((char*)&i, -1);
+        // check_offset((char*)&i, -1);
         char* buf = volume_read(i);
         if (buf == 0) {
           // std::cout << "Error reading data for log replay" << std::endl;
@@ -393,7 +393,7 @@ public:
       //return data
 
     long offset = request->offset();
-    check_offset((char*)&offset, 0);
+    // check_offset((char*)&offset, 0);
 
     if (state == BACKUP_NORMAL) {
       reply->set_status(EBS_NOT_PRIMARY);
@@ -467,7 +467,7 @@ public:
       //return success
 
     long offset = request->offset();
-    check_offset((char*)&offset, 0);
+    // check_offset((char*)&offset, 0);
 
     if (state == BACKUP_NORMAL) {
       reply->set_status(EBS_NOT_PRIMARY);
@@ -507,11 +507,12 @@ public:
       
       if (!status.ok())
         state = SINGLE_SERVER;
-      else
+      else {
         if (relay_reply.status() == EBS_VOLUME_ERR) {
           reply->set_status(EBS_VOLUME_ERR);
           goto free_locks;
         } 
+      }
     }
     
     //Send to log
