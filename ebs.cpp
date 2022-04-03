@@ -78,6 +78,7 @@ int ebs_write(void *buf, off_t offset) {
   ebs::WriteReply reply;
 
   while (true) {
+    auto ping = channels[(primary_idx + 1) % 2]->GetState(true);
     grpc::ClientContext context;
     grpc::Status status = stubs[primary_idx]->write(&context, request, &reply);
 
