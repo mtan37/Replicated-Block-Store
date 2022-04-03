@@ -68,7 +68,7 @@ std::vector<int> offset_log = {};
 std::shared_ptr<grpc::Channel> channel;
 std::unique_ptr<ebs::Backup::Stub> stub;
 
-timespec start, end, singleserver, start_replay, end_replay;
+timespec start, end, startheartbeat, endheartbeat, singleserver, backupservice, serverservice, start_replay, end_replay;
 
 inline void check_offset(char* offset, int16_t code) {
   if (strncmp(offset, "CRASH", 5) == 0) {
@@ -195,7 +195,7 @@ int volume_write(const char* data, int offset) {
   volume.write(data, BLOCK_SIZE - (offset % 4096));
   volume.flush();
   volume.close();
-  std::cout << "write1 " << block_temp << " " << true_file << std::endl;
+  //std::cout << "write1 " << block_temp << " " << true_file << std::endl;
   rename(block_temp.c_str(), true_file.c_str());
   
   if (offset % 4096 != 0) {
@@ -213,7 +213,7 @@ int volume_write(const char* data, int offset) {
     volume_extra.write(data + BLOCK_SIZE - (offset % 4096), offset % 4096);
     volume_extra.flush();
     volume_extra.close();
-      std::cout << "write2 " << block_temp_extra << " " << true_file_extra << std::endl;
+      //std::cout << "write2 " << block_temp_extra << " " << true_file_extra << std::endl;
     rename(block_temp_extra.c_str(), true_file_extra.c_str());
   }
   
@@ -332,6 +332,10 @@ void start_backup_heartbeat(
   grpc::Server *backup_service,
   std::thread *backup_service_thread) {
 
+    clock_gettime(CLOCK_MONOTONIC, &startheartbeat);
+    uint64_t diff = 1000000000L * (startheartbeat.tv_sec - start.tv_sec) + startheartbeat.tv_nsec - start.tv_nsec;
+    std::cout << "1 Starting heartbeat: " << diff << std::endl;
+
     // start monitoring heartbeat
     double elapsed = 0;
     timespec now;
@@ -359,6 +363,10 @@ void start_backup_heartbeat(
       }    
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &endheartbeat);
+    diff = 1000000000L * (endheartbeat.tv_sec - startheartbeat.tv_sec) + endheartbeat.tv_nsec - startheartbeat.tv_nsec;
+    std::cout << "2 Ending heartbeat: " << diff << std::endl;
+
     // Transition into primary state
     state = INITIALIZING;
     initialize_grpc_channel();
@@ -372,8 +380,8 @@ void start_backup_heartbeat(
 
     state = SINGLE_SERVER;
     clock_gettime(CLOCK_MONOTONIC, &singleserver);
-    uint64_t diff = 1000000000L * (singleserver.tv_sec - start.tv_sec) + singleserver.tv_nsec - start.tv_nsec;
-    std::cout << "Finished singleserver: " << start.tv_sec << " " << singleserver.tv_sec << " " << diff << std::endl;
+    diff = 1000000000L * (singleserver.tv_sec - endheartbeat.tv_sec) + singleserver.tv_nsec - endheartbeat.tv_nsec;
+    std::cout << "3 Finished singleserver: " << diff << std::endl;
     
     state_cv.notify_all();
 
@@ -417,7 +425,7 @@ public:
                           ebs::ReplayReply *reply) {
     clock_gettime(CLOCK_MONOTONIC, &start_replay);  
     uint64_t diff = 1000000000L * (start_replay.tv_sec - start.tv_sec) + start_replay.tv_nsec - start.tv_nsec;
-    std::cout << "Finished heartbeat, started replaylog: " << diff << std::endl;
+    std::cout << "1 Finished heartbeat, started replaylog: " << diff << std::endl;
     //std::cout << "Backup got replayLog call \n";
 
     // update heartbeat
@@ -443,7 +451,7 @@ public:
     
     clock_gettime(CLOCK_MONOTONIC, &end_replay);  
     diff = 1000000000L * (end_replay.tv_sec - start_replay.tv_sec) + end_replay.tv_nsec - start_replay.tv_nsec;
-    std::cout << "Finished replaylog: " << diff << std::endl;
+    std::cout << "2 Finished replaylog: " << diff << std::endl;
     
     //return success
     return grpc::Status::OK;
@@ -662,6 +670,7 @@ std::unique_ptr<grpc::Server> export_backup (std::string ip, BackupImpl *backup)
   builder.AddListeningPort(my_address, grpc::InsecureServerCredentials());
   builder.RegisterService(backup);
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
+
   return server;
 }
 
@@ -708,6 +717,9 @@ int main (int argc, char** argv) {
   BackupImpl backup;
   std::unique_ptr<grpc::Server> backup_service = export_backup(pb_ip, &backup);
   std::string name = "backup";
+  clock_gettime(CLOCK_MONOTONIC, &backupservice);
+  uint64_t diff = 1000000000L * (backupservice.tv_sec - start.tv_sec) + backupservice.tv_nsec - start.tv_nsec;
+  std::cout << "1 Started backup service: " << diff << std::endl;
   std::thread backup_service_thread(run_service, backup_service.get(), name);
 
   // export server interface to listen for clients
@@ -715,14 +727,18 @@ int main (int argc, char** argv) {
   std::unique_ptr<grpc::Server> server_service = export_server(pb_ip, &ebs_server);
   name = "server";
   std::thread server_service_thread(run_service, server_service.get(), name);
+  clock_gettime(CLOCK_MONOTONIC, &serverservice);
+  diff = 1000000000L * (serverservice.tv_sec - start.tv_sec) + serverservice.tv_nsec - start.tv_nsec;
+  std::cout << "2 Started server service: " << diff << std::endl;
+
 
   // start heartbeat thread(as backup)
   // This thread monitors for timeout and update state for transition
   std::thread heartbeat(start_backup_heartbeat, backup_service.get(), &backup_service_thread);
 
   clock_gettime(CLOCK_MONOTONIC, &end);  
-  uint64_t diff = 1000000000L * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
-  std::cout << "Launched threads: " << diff << std::endl;
+  diff = 1000000000L * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
+  std::cout << "3 Launched threads: " << diff << std::endl;
 
   // once hearbeat thread stop, stop service services
   heartbeat.join();
