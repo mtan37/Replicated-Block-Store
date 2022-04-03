@@ -34,6 +34,41 @@ int ebs_init(char* ip1, char* port1, char* ip2, char* port2) {
   return 0;
 }
 
+int ebs_read_shared(void *buf, off_t offset) {
+  printf("Creating sharred chanel to %s:%s\n", "10.10.1.4", "18005");
+  static std::shared_ptr<grpc::Channel> channel = grpc::CreateChannel("10.10.1.4:18005", grpc::InsecureChannelCredentials());
+  static std::unique_ptr<ebs::Server::Stub> stub = ebs::Server::NewStub(channel);
+
+  ebs::ReadReq request;
+  request.set_offset(offset);
+
+  ebs::ReadReply reply;
+  printf("\nEBS Read\n");
+
+  // for (int i = 0; i < 2; ++i) {    
+  while (true){
+    
+    grpc::ClientContext context;
+    grpc::Status status = stub->read(&context, request, &reply);
+
+    if (status.ok()) {
+      switch (reply.status()) {
+        case EBS_SUCCESS:
+          printf("EBS SUCCESS\n");
+          // memcpy(buf, reply.data().data(), 4096);
+          return EBS_SUCCESS;
+        case EBS_NOT_PRIMARY:
+          printf("EBS NOT PRIMARY\n");
+        default:
+          return EBS_UNKNOWN_ERROR;
+      }      
+    }    
+  }
+
+  printf("Exiting EBS\n");
+  return EBS_NO_SERVER;
+}
+
 int ebs_read(void *buf, off_t offset) {
   ebs::ReadReq request;
   request.set_offset(offset);
@@ -81,7 +116,7 @@ int ebs_write(void *buf, off_t offset) {
     auto ping = channels[(primary_idx + 1) % 2]->GetState(true);
     grpc::ClientContext context;
     grpc::Status status = stubs[primary_idx]->write(&context, request, &reply);
-
+    // std::cout << "CHECKING STATUS" << std::endl;
     if (status.ok()) {
       switch (reply.status()) {
         case EBS_SUCCESS:

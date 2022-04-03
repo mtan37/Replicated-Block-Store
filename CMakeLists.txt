@@ -85,7 +85,7 @@ foreach(_target simple_test simple_test_crash single_client_benchmark continuous
 endforeach()
 
 # c++ test targets
-foreach(_target availability_test_crash)
+foreach(_target availability_test_crash client_failover)
   add_executable(${_target} "${_target}.cpp" helper.cpp)
   target_link_libraries(${_target}
     ebs

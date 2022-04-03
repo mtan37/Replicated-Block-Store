@@ -26,6 +26,7 @@ const std::string DEF_SERVER_PORT_ALT = "18002";// TEST
 
 const std::string DEF_BACKUP_PORT = "18003";// default port to listen on backup service
 const std::string DEF_BACKUP_PORT_ALT = "18004";// TEST
+const std::string DEF_SHARED_PORT = "18005";// TEST
 const int HB_INIT_TIMEOUT = 8;
 const int HB_FAIL_TIMEOUT = 2;
 const int HB_SEND_TIMEOUT = 1;
@@ -38,7 +39,9 @@ const int HB_SEND_TIMEOUT = 1;
 ################*/
 std::string pb_ip = "0.0.0.0"; // IP addr I listen on
 std::string alt_ip = "0.0.0.0"; // IP addr of secondary server
+std::string shared_addy = "0.0.0.0";
 int is_alt = false; // Variable used for easy local testing...
+int is_shared = false; // Variable used to share client server IP (10.10.1.4)
 timespec last_heartbeat; // time last heartbeat received by backup
 
 // Initial state: BACKUP_NORMAL
@@ -71,6 +74,7 @@ inline void check_offset(char* offset, int16_t code) {
   if (strncmp(offset, "CRASH", 5) == 0) {
     if ((char)state == offset[5] && code == (int16_t)(offset[6])) {
       assert(0);
+      std::cout << "JUST ASSERTED SOME BULLSHIT" << std::endl;
     }
     else {
       memset(offset, 0, 8);
@@ -237,6 +241,11 @@ void start_primary_heartbeat() {
   // initialize the variable needed for grpc heartbeat call
   // channels should already be initialized in the backup heartbeat before heartbeat thread start
   std::cout << "Start sending out primary heartbeat" << std::endl;
+  if (is_shared){
+    // Test failover with swapped IP
+    std::cout << "NOW LISTENING ON 10.10.1.4" << std::endl;
+    int ret = system("sudo ip addr add 10.10.1.4/24 dev ens1f0");
+  }
 
   google::protobuf::Empty request;
   google::protobuf::Empty reply;
@@ -623,10 +632,12 @@ void run_service(grpc::Server *server, std::string serviceName) {
 std::unique_ptr<grpc::Server> export_server (std::string ip, ServerImpl *ebs_server) {
   std::string my_address = ip + ":" + DEF_SERVER_PORT;
   if (is_alt) my_address = ip + ":" + DEF_SERVER_PORT_ALT;
+  if (is_shared) shared_addy = ip + ":" + DEF_SHARED_PORT;
   std::cout << "server service listening on "  << my_address << "\n";
 
   grpc::ServerBuilder builder;
-    builder.AddListeningPort(my_address, grpc::InsecureServerCredentials());
+  builder.AddListeningPort(my_address, grpc::InsecureServerCredentials());
+  if (is_shared) builder.AddListeningPort(shared_addy, grpc::InsecureServerCredentials());
   builder.RegisterService(ebs_server);
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
   return server;
@@ -666,10 +677,19 @@ int parse_args(int argc, char** argv){
     pb_ip = std::string(argv[1]);
     alt_ip = std::string(argv[2]);
 
-    if (argc >= 4 && std::string(argv[3]).compare("-alt") == 0) {
-      is_alt = true; // used for testing!!
-    }
+    // if (argc >= 4 && std::string(argv[3]).compare("-alt") == 0) {
+    //   is_alt = true; // used for testing!!
+    // }
     
+    for (int i = 3; i < argc; i++){
+      if (std::string(argv[i]).compare("-alt") == 0) {
+        is_alt = true; // used for testing!!
+      } else if (std::string(argv[i]).compare("-shared") == 0) {
+        std::cout << "Setting is_shared to true" << std::endl;
+        is_shared = true;
+      }
+    }
+
     return 0;
 }
 
@@ -678,6 +698,7 @@ int main (int argc, char** argv) {
   if (parse_args(argc, argv) <0) return -1;
   std::cout << "TEST: local computer ip " << pb_ip << "\n";
   std::cout << "TEST: alternate computer ip " << alt_ip << "\n";
+  if (is_shared) int ret = system("sudo ip addr del 10.10.1.4/24 dev ens1f0");
   
   mkdir("volume", 0700);
   
