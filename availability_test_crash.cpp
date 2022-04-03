@@ -33,13 +33,13 @@ int main() {
     std::cout << "\n************\n*";
     switch(i){
       case 0:
-        std::cout << "* Write / Read";
+        std::cout << "* Write / Read Test";
         break;
       case 1:
-        std::cout << "* Write / Crash Primary / Read";
+        std::cout << "* Crash Primary / Write  / Read Test";
         break;
       case 2:
-        std::cout << "* Write / Crash Backup / Read";
+        std::cout << "* Crash Backup / Write / Read Test";
         break;
       default:
         break;
@@ -53,29 +53,38 @@ int main() {
       write_buf[i] = i%256;
     }
     char read_buf[4096];
-    // write data
-    if (ebs_write(write_buf, 0) != EBS_SUCCESS) {
-      printf("Write failed\n");
-      return 0;
-    }
+
     if (i > 0){
+      std::cout << "Crashing Server\n";
       // crash server
       if (ebs_write(write_buf, *(long*) codes[i-1]) != EBS_SUCCESS) {
         printf("Crash/Write failed\n");
         return 0;
       }
     }
+
+    
+    // write data
+    std::cout << "Writing Data\n";
+    if (ebs_write(write_buf, 0) != EBS_SUCCESS) {
+      std::cout << "Write failed\n";
+      return 0;
+    }
+
+    
     
     // read data
+    std::cout << "Reading Data\n";
     if (ebs_read(read_buf, 0) != EBS_SUCCESS) {
       printf("Read failed\n");
       return 0;
     }
 
     // verify read and write match
+    std::cout << "Verifying match\n";
     for (int i = 0; i < 4096; ++i) {
       if (read_buf[i] != write_buf[i]) {
-        printf("Read did not return same data as write\n");
+        std::cout << "Read did not return same data as write\n";
         return 0;
       }
     }
@@ -83,9 +92,9 @@ int main() {
     set_time(&end); 
     double elapsed = difftimespec_ns(start, end);
     printf("Test passed - it took %f (s) \n", elapsed*1e-9);
-    if(i==1) sleep(12);
+    if(i==1) sleep(4);
   }
   
-  // sleep(20);
+  sleep(20);
   return 0;
 }
