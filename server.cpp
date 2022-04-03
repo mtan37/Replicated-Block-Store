@@ -8,6 +8,9 @@
 #include <mutex>
 #include <fstream>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "client_status_defs.h"
 #include "ebs.grpc.pb.h"
 #include "ReaderWriter.h"
@@ -75,6 +78,59 @@ inline void check_offset(char* offset, int16_t code) {
   }
 }
 
+/**
+ makes copy of copy_path and saves it as tmp_path
+*/
+int copy_file(std::string copy_path, std::string temp_path){
+    int fd;
+    // open cache file
+    fd = ::open(copy_path.c_str(), O_RDONLY, 0777);
+    if (fd < 0){return -1;}
+    // get copy file deets and write to string
+    int length = 4096;
+    if (length<0){return -1;}
+    if (lseek(fd, 0, SEEK_SET) < 0) {return -1;}
+    char *pChars = new char[length];
+    int read_length = read(fd, pChars, length);
+    // now have cache file as string, close cache file
+    // and save data to temp location
+    if (::close(fd) < 0){return -1;}
+    // write char string to new file
+    //Open file for write
+    fd = ::open(temp_path.c_str(), O_CREAT | O_WRONLY | O_SYNC, 0777);
+    if (fd < 0){return -1;}
+    // Write to temp file and close
+    if (write(fd, pChars, length) < 0){
+        ::close(fd);
+        return -1;
+    }
+    // Force flush
+    if (fsync(fd) < 0){
+        ::close(fd);
+        return -1;
+    }
+    ::close(fd);
+    delete pChars;
+    return 0;
+}
+std::string get_time_str(){
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    long tmstr;
+    tmstr = (long)ts.tv_nsec;
+    return std::to_string(tmstr);
+}
+/**
+ get_temp_path()
+ Generates temporary file name by adding date time to file name
+*/
+std::string get_temp_path(std::string userpath){
+    // add current timestamp to name
+    userpath = userpath + "_tmp_" + get_time_str();
+    // std::cout << "Temp path : " << userpath << std::endl;
+    return userpath;
+}
+
 int initialize_volume(int block) {
   std::ifstream volume_exists("volume/" + std::to_string(block));
   if (volume_exists.good()) {
@@ -88,8 +144,7 @@ int initialize_volume(int block) {
     char zero = 0;
     char buf[BLOCK_SIZE];
     memset(buf, 0, BLOCK_SIZE);
-    for (int i = 0; i < NUM_BLOCKS; i++)
-      volume_create.write(buf, BLOCK_SIZE);
+    volume_create.write(buf, BLOCK_SIZE);
   
     volume_create.close();
     return 1;
@@ -125,24 +180,38 @@ char* volume_read(int offset) {
 int volume_write(const char* data, int offset) {
   int block = offset / 4096;
   initialize_volume(block);
-  std::fstream volume("volume/" + std::to_string(block), std::ios::in | std::ios::out);
+ 
+  std::string true_file = "volume/" + std::to_string(block);
+	std::string block_temp = get_temp_path(true_file);
+	copy_file(true_file, block_temp);
+	
+  std::fstream volume(block_temp, std::ios::in | std::ios::out);
   if (!volume.good())
     return 0;
   volume.seekp(offset % 4096, std::ios::beg);
   volume.write(data, BLOCK_SIZE - (offset % 4096));
   volume.flush();
   volume.close();
+  std::cout << "write1 " << block_temp << " " << true_file << std::endl;
+  rename(block_temp.c_str(), true_file.c_str());
   
   if (offset % 4096 != 0) {
     int block_extra = (offset / 4096) + 1;
     initialize_volume(block_extra);
-    std::fstream volume_extra("volume/" + std::to_string(block_extra), std::ios::in | std::ios::out);
+    
+    std::string true_file_extra = "volume/" + std::to_string(block_extra);
+	  std::string block_temp_extra = get_temp_path(true_file_extra);
+	  copy_file(true_file_extra, block_temp_extra);
+    
+    std::fstream volume_extra(block_temp_extra, std::ios::in | std::ios::out);
     if (!volume_extra.good())
       return 0;
     volume_extra.seekp(0, std::ios::beg);
     volume_extra.write(data + BLOCK_SIZE - (offset % 4096), offset % 4096);
     volume_extra.flush();
     volume_extra.close();
+      std::cout << "write2 " << block_temp_extra << " " << true_file_extra << std::endl;
+    rename(block_temp_extra.c_str(), true_file_extra.c_str());
   }
   
   return 1;
@@ -156,6 +225,7 @@ void initialize_grpc_channel() {
   if (is_alt) {
     address = alt_ip + ":" + DEF_BACKUP_PORT;
   }
+  std::cout << "Primary starting to send heatbeat to " << address << std::endl;
 
   grpc::ChannelArguments args;
   args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
@@ -323,6 +393,7 @@ public:
     set_time(&last_heartbeat);
     // std::cout << "Backup got write relay" << std::endl;
     long offset = request->offset();
+    check_offset((char*)&offset, 0);
     
     if (volume_write(request->data().data(), offset) == 0) {
       reply->set_status(EBS_VOLUME_ERR);

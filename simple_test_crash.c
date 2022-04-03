@@ -3,7 +3,7 @@
 #include "ebs.h"
 
 int main() {
-  ebs_init("localhost", "18001", "localhost", "18002");
+  ebs_init("10.10.1.2", "18001", "10.10.1.3", "18002");
 
   char code[] = {'C', 'R', 'A', 'S', 'H', 1, 0, 0};
 

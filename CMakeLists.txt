@@ -77,8 +77,16 @@ foreach(_target server)
 endforeach()
 
 # c test targets
-foreach(_target simple_test simple_test_crash single_client_benchmark continuous_write_read)
+foreach(_target simple_test simple_test_crash single_client_benchmark continuous_write_read data_overlap_test data_writecrash_test data_failover_test data_singleserver_test)
   add_executable(${_target} "${_target}.c")
+  target_link_libraries(${_target}
+    ebs
+  )
+endforeach()
+
+# c++ test targets
+foreach(_target availability_test_crash)
+  add_executable(${_target} "${_target}.cpp" helper.cpp)
   target_link_libraries(${_target}
     ebs
   )
