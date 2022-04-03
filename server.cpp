@@ -40,6 +40,7 @@ std::string pb_ip = "0.0.0.0"; // IP addr I listen on
 std::string alt_ip = "0.0.0.0"; // IP addr of secondary server
 int is_alt = false; // Variable used for easy local testing...
 timespec last_heartbeat; // time last heartbeat received by backup
+std::mutex log_mtx; // locks the section write to backup log
 
 // Initial state: BACKUP_NORMAL
 // BACKUP_NORMAL -> INITIALIZING when backup doesn't get heartbeat from primary
@@ -588,8 +589,12 @@ public:
     //Send to log
     if (state == SINGLE_SERVER) {
       long log_off = request->offset();
-      if (std::find(offset_log.begin(), offset_log.end(), log_off) == offset_log.end())
+      
+      log_mtx.lock();
+      if (std::find(offset_log.begin(), offset_log.end(), log_off) == offset_log.end()) {
         offset_log.push_back(log_off);
+      }
+      log_mtx.unlock();
     }
     
     //Make local write
