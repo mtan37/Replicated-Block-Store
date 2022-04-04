@@ -17,10 +17,8 @@
     clock_gettime(CLOCK_MONOTONIC, &_end);                                     \
     unsigned long _nanos = nanos_diff(&_start, &_end);                         \
     _total_time += _nanos;                                                     \
-    if (_nanos < var) {                                                        \
-      var = _nanos;                                                            \
-    }                                                                          \
   }                                                                            \
+  var = _total_time/trials;                                                    \
 }
 
 static unsigned long nanos_diff(struct timespec* start, struct timespec* end) {
