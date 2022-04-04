@@ -30,7 +30,7 @@ const int HB_INIT_TIMEOUT = 8;
 const int HB_FAIL_TIMEOUT = 2;
 const int HB_SEND_TIMEOUT = 1;
 
-#define NUM_BLOCKS 256 // 1MB volume
+#define NUM_LOCKS 56000
 #define BLOCK_SIZE 4096
 
 /*################
@@ -193,7 +193,7 @@ int volume_write(const char* data, int offset) {
   volume.write(data, BLOCK_SIZE - (offset % 4096));
   volume.flush();
   volume.close();
-  std::cout << "write1 " << block_temp << " " << true_file << std::endl;
+  // std::cout << "write1 " << block_temp << " " << true_file << std::endl;
   rename(block_temp.c_str(), true_file.c_str());
   
   if (offset % 4096 != 0) {
@@ -211,7 +211,7 @@ int volume_write(const char* data, int offset) {
     volume_extra.write(data + BLOCK_SIZE - (offset % 4096), offset % 4096);
     volume_extra.flush();
     volume_extra.close();
-      std::cout << "write2 " << block_temp_extra << " " << true_file_extra << std::endl;
+    // std::cout << "write2 " << block_temp_extra << " " << true_file_extra << std::endl;
     rename(block_temp_extra.c_str(), true_file_extra.c_str());
   }
   
@@ -366,7 +366,7 @@ void start_backup_heartbeat(
     backup_service->Shutdown();
     backup_service_thread->join();
 
-    block_locks = new ReaderWriter[NUM_BLOCKS];
+    block_locks = new ReaderWriter[NUM_LOCKS];
 
     state = SINGLE_SERVER;
     state_cv.notify_all();
@@ -480,9 +480,9 @@ public:
     state_lock.unlock();
 
     long remainder = request->offset()%BLOCK_SIZE;
-    long block_num = (offset/BLOCK_SIZE) % NUM_BLOCKS;
+    long block_num = (offset/BLOCK_SIZE) % NUM_LOCKS;
     long next_block = block_num + 1;
-    if (next_block == NUM_BLOCKS) {
+    if (next_block == NUM_LOCKS) {
       next_block = block_num;
       block_num = 0; // acquire the lower number block lock first
     }
@@ -556,9 +556,9 @@ public:
     state_lock.unlock();
 
     long remainder = request->offset()%BLOCK_SIZE;
-    long block_num = (offset/BLOCK_SIZE) % NUM_BLOCKS;
+    long block_num = (offset/BLOCK_SIZE) % NUM_LOCKS;
     long next_block = block_num + 1;
-    if (next_block == NUM_BLOCKS) {
+    if (next_block == NUM_LOCKS) {
       next_block = block_num;
       block_num = 0; // acquire the lower number block lock first
     }
