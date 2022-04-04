@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
 
   char buf[4096];
   int offset = 0;
-  int read_latency = 0;
+  unsigned long long read_latency = 0;
   DO_TRIALS(
     {offset = (offset + 4096) % (1024*1024);},
     {
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   );
 
   offset = 0;
-  int unaligned_read_latency = 0;
+  unsigned long long unaligned_read_latency = 0;
   DO_TRIALS(
     {offset = (offset + 4096 + 10) % (1024*1024);},
     {
@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     unaligned_read_latency
   );
 
-  int write_latency = 0;
+  unsigned long long write_latency = 0;
   offset = 0;
   char write_buf[4096];
   for (int i = 0; i < 4096; ++i) {
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
     write_latency
   );
 
-  int unaligned_write_latency = 0;
+  unsigned long long unaligned_write_latency = 0;
   offset=0;
   for (int i = 0; i < 4096; ++i) {
     write_buf[i] = i%256;

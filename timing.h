@@ -9,7 +9,7 @@
 #define DO_TRIALS(setup, task, trials, var) {                                  \
   var = NANOS_PER_SEC;                                                         \
   struct timespec _start, _end;                                                \
-  unsigned long _total_time = 0;                                               \
+  unsigned long long _total_time = 0;                                               \
   for (int _i = 0; _i < trials; ++_i) {                                        \
     setup                                                                      \
     clock_gettime(CLOCK_MONOTONIC, &_start);                                   \
