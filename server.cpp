@@ -27,7 +27,7 @@ const std::string DEF_SERVER_PORT_ALT = "18002";// TEST
 const std::string DEF_BACKUP_PORT = "18003";// default port to listen on backup service
 const std::string DEF_BACKUP_PORT_ALT = "18004";// TEST
 const std::string DEF_SHARED_PORT = "18005";// TEST
-const int HB_INIT_TIMEOUT = 8;
+const int HB_INIT_TIMEOUT = 15;
 const int HB_FAIL_TIMEOUT = 2;
 const int HB_SEND_TIMEOUT = 1;
 
@@ -69,6 +69,12 @@ std::vector<int> offset_log = {};
 
 std::shared_ptr<grpc::Channel> channel;
 std::unique_ptr<ebs::Backup::Stub> stub;
+
+// Run grpc service in a loop
+void run_service(grpc::Server *server, std::string serviceName) {
+  std::cout << "Starting to run " << serviceName << "\n";
+  server->Wait();
+}
 
 inline void check_offset(char* offset, int16_t code) {
   if (strncmp(offset, "CRASH", 5) == 0) {
@@ -221,229 +227,6 @@ int volume_write(const char* data, int offset) {
   return 1;
 }
 
-/**
- * Helper function to initialize grpc channel
- */
-void initialize_grpc_channel() {
-  std::string address = alt_ip + ":" + DEF_BACKUP_PORT_ALT;
-  if (is_alt) {
-    address = alt_ip + ":" + DEF_BACKUP_PORT;
-  }
-  std::cout << "Primary starting to send heatbeat to " << address << std::endl;
-
-  grpc::ChannelArguments args;
-  args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
-  channel = grpc::CreateCustomChannel(address, grpc::InsecureChannelCredentials(), args);
-  stub = ebs::Backup::NewStub(channel);
-}
-
-void start_primary_heartbeat() {
-  // initialize the variable needed for grpc heartbeat call
-  // channels should already be initialized in the backup heartbeat before heartbeat thread start
-  std::cout << "Start sending out primary heartbeat" << std::endl;
-  if (is_shared){
-    // Test failover with swapped IP
-    std::cout << "NOW LISTENING ON 10.10.1.4" << std::endl;
-    int ret = system("sudo ip addr add 10.10.1.4/24 dev ens1f0");
-  }
-
-  google::protobuf::Empty request;
-  google::protobuf::Empty reply;
-
-  while (true){
-
-    std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
-    grpc::ClientContext context;  
-    grpc::Status status = stub->heartBeat(&context, request, &reply);
-    std::cout << "grpc call status is " << status.error_code() << "\n";
-
-    if (state == INITIALIZING) {
-      // don't handle the responses if the servrer is still initializing
-    } else if (status.ok() && state == PRIMARY_NORMAL) {
-      std::cout << "(p) BoopBoop\n"; 
-    } else if (status.ok() && state == SINGLE_SERVER) {
-      // send log to backup
-      recovery_lock.acquire_write(); // exclusive
-      state = RECOVERING;
-
-      ebs::ReplayReq log_request;
-      for (int i : offset_log) {
-        ebs::WriteReq* log_item = log_request.add_item();
-        log_item->set_offset(i);
-        check_offset((char*)&i, -1);
-        char* buf = volume_read(i);
-        if (buf == 0) {
-          std::cout << "Error reading data for log replay" << std::endl;
-        }
-        std::string s_buf;
-        s_buf.resize(BLOCK_SIZE);
-        memcpy(const_cast<char*>(s_buf.data()), buf, BLOCK_SIZE);
-        free(buf);
-        log_item->set_data(s_buf);
-      }
-
-      // send the log request to backup
-      bool backup_write_success = false;
-      while (!backup_write_success) {
-        grpc::ClientContext log_context;
-        ebs::ReplayReply log_reply;
-
-        grpc::Status log_status = 
-          stub->replayLog(&log_context, log_request, &log_reply);
-        std::cout << "send log grpc call status is " << log_status.error_code() << std::endl;
-
-        if (log_status.ok()){
-
-          // check the status returned by the backup
-          if (log_reply.status() == EBS_SUCCESS) {
-            backup_write_success = true;
-            offset_log.clear();
-          } else {
-            // Backup disk error. This is probably a case that require manual intervention 
-            // TODO not going to handle this for now, just break
-            break;
-          }
-
-        } else {
-          break;
-        }
-
-      }
-
-      if (backup_write_success) {
-        state = PRIMARY_NORMAL;
-      } else {
-        state = SINGLE_SERVER;
-      }
-
-      recovery_lock.release_write();
-
-    } else if (status.error_code() == grpc::UNAVAILABLE) {       
-      state = SINGLE_SERVER;
-    } else {
-      std::cout << "Something unexpected happend. Shuting down the server\n";
-      std::cout << status.error_code() << ": " << status.error_message()
-              << std::endl;  
-      break;
-    }
-
-    sleep(HB_SEND_TIMEOUT);
-  }
-
-  delete[] block_locks;
-  std::cout << "Primary heartbeat call terminate\n";
-}
-
-void start_backup_heartbeat(
-  grpc::Server *backup_service,
-  std::thread *backup_service_thread) {
-
-    // start monitoring heartbeat
-    double elapsed = 0;
-    timespec now;
-    set_time(&last_heartbeat); 
-
-    // Want larger timeout on init then rest of time
-    int timeout = HB_INIT_TIMEOUT;
-
-    while (true){
-      std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
-      
-      set_time(&now);
-      elapsed = difftimespec_s(last_heartbeat, now);
-
-      std::cout << "Checking Timeout: " << elapsed <<"\n";
-      if (elapsed < timeout){
-        if (elapsed < 0) elapsed = 0;
-        // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
-        sleep(timeout); 
-        timeout = HB_FAIL_TIMEOUT;
-      } else {
-        // Primary has timed out
-        std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
-        break;            
-      }    
-    }
-
-    // Transition into primary state
-    state = INITIALIZING;
-    initialize_grpc_channel();
-    std::thread primary_server_heartbeat_thread(start_primary_heartbeat);
-    
-    // stop backup service
-    backup_service->Shutdown();
-    backup_service_thread->join();
-
-    block_locks = new ReaderWriter[NUM_BLOCKS];
-
-    state = SINGLE_SERVER;
-    state_cv.notify_all();
-
-    primary_server_heartbeat_thread.join();
-}
-
-/*################
-# Primary-Backup Communication
-# This is running on the backup only to receive messages from the primary
-################*/
-class BackupImpl final : public ebs::Backup::Service {
-public:
-  grpc::Status heartBeat (grpc::ServerContext *context,
-                          const google::protobuf::Empty *request,
-                          google::protobuf::Empty *reply) {
-    std::cout << "(b) BoopBoop" << std::endl;
-    set_time(&last_heartbeat);
-    return grpc::Status::OK;
-  }
-
-  grpc::Status write (grpc::ServerContext *context,
-                      const ebs::WriteReq *request,
-                      ebs::WriteReply *reply) {
-    set_time(&last_heartbeat);
-    std::cout << "Backup got write relay" << std::endl;
-    long offset = request->offset();
-    check_offset((char*)&offset, 0);
-    
-    if (volume_write(request->data().data(), offset) == 0) {
-      reply->set_status(EBS_VOLUME_ERR);
-    }
-    else {
-      reply->set_status(EBS_SUCCESS);
-    }
-    
-    return grpc::Status::OK;
-  }
-
-  grpc::Status replayLog (grpc::ServerContext *context,
-                          const ebs::ReplayReq *request,
-                          ebs::ReplayReply *reply) {
-    std::cout << "Backup got replayLog call \n";
-
-    // update heartbeat
-    set_time(&last_heartbeat);
-    
-    //while more writes:
-    for (int i = 0; i < request->item_size(); i++) {
-      ebs::WriteReq log_item = request->item(i);
-      //do write
-      long offset = log_item.offset();
-      std::cout << "Replaying log, offset " << offset << std::endl;
-      // update heartbeat again in case the log is really long
-      set_time(&last_heartbeat);
-            
-      if (volume_write(log_item.data().data(), offset) == 0) {
-        reply->set_status(EBS_VOLUME_ERR);
-        std::cout << "replayLog write error" << std::endl;
-        return grpc::Status::OK;
-      }
-    }
-    
-    reply->set_status(EBS_SUCCESS);
-    
-    //return success
-    return grpc::Status::OK;
-  }
-};
 
 
 
@@ -620,10 +403,22 @@ public:
   }
 };
 
-// Run grpc service in a loop
-void run_service(grpc::Server *server, std::string serviceName) {
-  std::cout << "Starting to run " << serviceName << "\n";
-  server->Wait();
+
+
+/**
+ * Helper function to initialize grpc channel
+ */
+void initialize_grpc_channel() {
+  std::string address = alt_ip + ":" + DEF_BACKUP_PORT_ALT;
+  if (is_alt) {
+    address = alt_ip + ":" + DEF_BACKUP_PORT;
+  }
+  std::cout << "Primary starting to send heatbeat to " << address << std::endl;
+
+  grpc::ChannelArguments args;
+  args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
+  channel = grpc::CreateCustomChannel(address, grpc::InsecureChannelCredentials(), args);
+  stub = ebs::Backup::NewStub(channel);
 }
 
 /**
@@ -632,8 +427,11 @@ void run_service(grpc::Server *server, std::string serviceName) {
 std::unique_ptr<grpc::Server> export_server (std::string ip, ServerImpl *ebs_server) {
   std::string my_address = ip + ":" + DEF_SERVER_PORT;
   if (is_alt) my_address = ip + ":" + DEF_SERVER_PORT_ALT;
-  if (is_shared) shared_addy = ip + ":" + DEF_SHARED_PORT;
+  std::string new_addy = "10.10.1.4:";
+  if (is_shared) shared_addy = new_addy + DEF_SHARED_PORT;
   std::cout << "server service listening on "  << my_address << "\n";
+  if (is_shared) std::cout << "server service listening on "  << shared_addy << "\n";
+
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort(my_address, grpc::InsecureServerCredentials());
@@ -642,6 +440,230 @@ std::unique_ptr<grpc::Server> export_server (std::string ip, ServerImpl *ebs_ser
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
   return server;
 }
+
+void start_primary_heartbeat() {
+  // initialize the variable needed for grpc heartbeat call
+
+   
+
+  google::protobuf::Empty request;
+  google::protobuf::Empty reply;
+
+  while (true){
+
+    std::cout << "TEST: start of new primary heartbeat iteration. My state is " << state <<"\n";
+    grpc::ClientContext context;  
+    grpc::Status status = stub->heartBeat(&context, request, &reply);
+    std::cout << "grpc call status is " << status.error_code() << "\n";
+
+    if (state == INITIALIZING) {
+      // don't handle the responses if the servrer is still initializing
+    } else if (status.ok() && state == PRIMARY_NORMAL) {
+      std::cout << "(p) BoopBoop\n"; 
+    } else if (status.ok() && state == SINGLE_SERVER) {
+      // send log to backup
+      recovery_lock.acquire_write(); // exclusive
+      state = RECOVERING;
+
+      ebs::ReplayReq log_request;
+      for (int i : offset_log) {
+        ebs::WriteReq* log_item = log_request.add_item();
+        log_item->set_offset(i);
+        check_offset((char*)&i, -1);
+        char* buf = volume_read(i);
+        if (buf == 0) {
+          std::cout << "Error reading data for log replay" << std::endl;
+        }
+        std::string s_buf;
+        s_buf.resize(BLOCK_SIZE);
+        memcpy(const_cast<char*>(s_buf.data()), buf, BLOCK_SIZE);
+        free(buf);
+        log_item->set_data(s_buf);
+      }
+
+      // send the log request to backup
+      bool backup_write_success = false;
+      while (!backup_write_success) {
+        grpc::ClientContext log_context;
+        ebs::ReplayReply log_reply;
+
+        grpc::Status log_status = 
+          stub->replayLog(&log_context, log_request, &log_reply);
+        std::cout << "send log grpc call status is " << log_status.error_code() << std::endl;
+
+        if (log_status.ok()){
+
+          // check the status returned by the backup
+          if (log_reply.status() == EBS_SUCCESS) {
+            backup_write_success = true;
+            offset_log.clear();
+          } else {
+            // Backup disk error. This is probably a case that require manual intervention 
+            // TODO not going to handle this for now, just break
+            break;
+          }
+
+        } else {
+          break;
+        }
+
+      }
+
+      if (backup_write_success) {
+        state = PRIMARY_NORMAL;
+      } else {
+        state = SINGLE_SERVER;
+      }
+
+      recovery_lock.release_write();
+
+    } else if (status.error_code() == grpc::UNAVAILABLE) {       
+      state = SINGLE_SERVER;
+    } else {
+      std::cout << "Something unexpected happend. Shuting down the server\n";
+      std::cout << status.error_code() << ": " << status.error_message()
+              << std::endl;  
+      break;
+    }
+
+    sleep(HB_SEND_TIMEOUT);
+  }
+
+  delete[] block_locks;
+  
+  std::cout << "Primary heartbeat call terminate\n";
+}
+
+void start_backup_heartbeat(
+  grpc::Server *backup_service,
+  std::thread *backup_service_thread) {
+
+    // start monitoring heartbeat
+    double elapsed = 0;
+    timespec now;
+    set_time(&last_heartbeat); 
+
+    // Want larger timeout on init then rest of time
+    int timeout = HB_INIT_TIMEOUT;
+
+    while (true){
+      std::cout << "TEST: start of new backup heartbeat iteration. My state is " << state <<"\n";
+      
+      set_time(&now);
+      elapsed = difftimespec_s(last_heartbeat, now);
+
+      std::cout << "Checking Timeout: " << elapsed <<"\n";
+      if (elapsed < timeout){
+        if (elapsed < 0) elapsed = 0;
+        // continue - still good, sleep until HB_LISTEN_TIMEOUT period and check again
+        sleep(timeout); 
+        timeout = HB_FAIL_TIMEOUT;
+      } else {
+        // Primary has timed out
+        std::cout << "Primary is non-responsive, transitioning to primary" << std::endl;      
+        break;            
+      }    
+    }
+
+    // Transition into primary state
+    state = INITIALIZING;
+    initialize_grpc_channel();
+    std::thread primary_server_heartbeat_thread(start_primary_heartbeat);
+    
+    // stop backup service
+    backup_service->Shutdown();
+    backup_service_thread->join();
+
+    block_locks = new ReaderWriter[NUM_BLOCKS];
+
+    // if (is_shared){
+    //   // Test failover with swapped IP
+    //   std::cout << "NOW LISTENING ON 10.10.1.4" << std::endl;
+    //   int ret = system("sudo ip addr add 10.10.1.4/24 dev ens1f0");
+    // }
+
+
+    // // channels should already be initialized in the backup heartbeat before heartbeat thread start
+    // // export server interface to listen for clients
+    // ServerImpl ebs_server;
+    // std::unique_ptr<grpc::Server> server_service = export_server(pb_ip, &ebs_server);
+    // std::string name = "server";
+    // std::thread server_service_thread(run_service, server_service.get(), name);
+
+    // std::cout << "Start sending out primary heartbeat" << std::endl;
+    state = SINGLE_SERVER;
+    state_cv.notify_all();
+
+    primary_server_heartbeat_thread.join();
+    // server_service->Shutdown();
+    // server_service_thread.join();
+}
+
+/*################
+# Primary-Backup Communication
+# This is running on the backup only to receive messages from the primary
+################*/
+class BackupImpl final : public ebs::Backup::Service {
+public:
+  grpc::Status heartBeat (grpc::ServerContext *context,
+                          const google::protobuf::Empty *request,
+                          google::protobuf::Empty *reply) {
+    std::cout << "(b) BoopBoop" << std::endl;
+    set_time(&last_heartbeat);
+    return grpc::Status::OK;
+  }
+
+  grpc::Status write (grpc::ServerContext *context,
+                      const ebs::WriteReq *request,
+                      ebs::WriteReply *reply) {
+    set_time(&last_heartbeat);
+    std::cout << "Backup got write relay" << std::endl;
+    long offset = request->offset();
+    check_offset((char*)&offset, 0);
+    
+    if (volume_write(request->data().data(), offset) == 0) {
+      reply->set_status(EBS_VOLUME_ERR);
+    }
+    else {
+      reply->set_status(EBS_SUCCESS);
+    }
+    
+    return grpc::Status::OK;
+  }
+
+  grpc::Status replayLog (grpc::ServerContext *context,
+                          const ebs::ReplayReq *request,
+                          ebs::ReplayReply *reply) {
+    std::cout << "Backup got replayLog call \n";
+
+    // update heartbeat
+    set_time(&last_heartbeat);
+    
+    //while more writes:
+    for (int i = 0; i < request->item_size(); i++) {
+      ebs::WriteReq log_item = request->item(i);
+      //do write
+      long offset = log_item.offset();
+      std::cout << "Replaying log, offset " << offset << std::endl;
+      // update heartbeat again in case the log is really long
+      set_time(&last_heartbeat);
+            
+      if (volume_write(log_item.data().data(), offset) == 0) {
+        reply->set_status(EBS_VOLUME_ERR);
+        std::cout << "replayLog write error" << std::endl;
+        return grpc::Status::OK;
+      }
+    }
+    
+    reply->set_status(EBS_SUCCESS);
+    
+    //return success
+    return grpc::Status::OK;
+  }
+};
+
+
+
 
 /**
  * Export backup grpc interface
@@ -657,6 +679,9 @@ std::unique_ptr<grpc::Server> export_backup (std::string ip, BackupImpl *backup)
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
   return server;
 }
+
+
+
 
 /*################
 # Main
@@ -711,7 +736,6 @@ int main (int argc, char** argv) {
   std::string name = "backup";
   std::thread backup_service_thread(run_service, backup_service.get(), name);
 
-  // export server interface to listen for clients
   ServerImpl ebs_server;
   std::unique_ptr<grpc::Server> server_service = export_server(pb_ip, &ebs_server);
   name = "server";
