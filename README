@@ -1,0 +1,61 @@
+(Replication strategy)
+1.1.a
+Primary-backup approach. Reads are served by the primary with the read() gRPC call in server.cpp, line 452. Writes are served by the primary with the write() gRPC call in server.cpp, line 518, and replicated writes to the backup are handled by the backup write() gRPC call in server.cpp, line 391. Log replays are handled by the backup with replayLog(), server.cpp line 409.
+
+1.1.b
+The client can always contact any server that is not dead, however only the primary will actually handle requests. The backup will respond with the location of the primary. See lines 470 and 544 for backup responses.
+
+1.1.c
+Approach outline in 1.1.a.
+
+1.1.d
+Server crashes are handled transparently by the client library, which will block until the request is handled by the current primary. See the loops starting on lines 43 and 80 in ebs.cpp.
+
+(Durability)
+1.2
+We create per-block file volumes in initialize_volume(), in server.cpp line 135. We perform reads from files in volume_read(), server.cpp line 155, and writes to files in volume_write(), server.cpp line 181.
+
+(Crash Recovery Protocol)
+1.3.a
+Writes sent to the primary are received by the write() gRPC call described in 1.1.a. Write requests are relayed to the backup if it’s alive at server.cpp line 573, or else logged at line 589. Writes are then committed locally in the write() function at line 600. The primary will not respond to writes due to acquired locks during the backup recovery phase, at line 258 in start_primary_heartbeat() in server.cpp.
+
+The client itself stores IPs for both servers.  These IPs are sent in, and the necessary channels are set up, using the init function in ebs.cpp, starting at line 18.  If a request does not get a return status of OK it will switch channels.  An example of this can be found for the read request in ebs.cpp at line 59.
+
+1.3.b
+For primary failure: Primary failure is identified by the backup using a heartbeat mechanism.  The backup has a timeout thread that wakes up every 2 seconds and checks if the heartbeat was updated while asleep.  This code starts in server.cpp at line 341.  The if statement at line 348 deals with normal operations, while the else statement at 353 initiates the primary transition.  The transition continues at line 361 through the end of the start_backup_heartbeat function. The primary makes gRPC calls to the backup, including heartbeat, all of which update the last_heartbeat variable.  The heartbeat call can be found in server.cpp under BackupIMpl at line 383. The server deals with sending the heartbeat on its own thread.  That thread calls start_primary_heartbeat at line 237 in server.cpp.  This thread also handles replay log as outlined elsewhere.
+
+For backup failure: The backup will come back up as a backup. The backup receives the log in replayLog(), server.cpp line 409, and replays individual written blocks at logged offsets in lines 417-431. The primary server sends that log when it detects a backup has come up in the start_primary_heartbeat() function, server.cpp line 237, and makes the call at line 284. The code that immediately follows the call checks for successful backup recovery and clears the log only if the call returns OK.
+
+
+(Correctness)
+(Availability)
+2.1.a
+Previous responses have already outlined how availability is maintained.  The file availability_test_crash.cpp was used to demonstrate that the crash is hidden from the user
+
+(Strong Consistency)
+2.1.b
+We demonstrate strong consistency with aligned and unaligned writes/reads in normal operation with the client code in data_overlap_test.c. We demonstrate strong consistency after a failover between writes with the client code in data_failover_test.c, and we show strong consistency during single-server operation and backup recovery with the client code in data_singleserver_test.c. We show strong consistency after a mid-write crash with data_writecrash_test.c, and in the middle of a log replay crash with data_overlap_test.c running under a version of the server with a manual crash point inserted into the replayLog gRPC call in server.cpp.
+
+(Testing strategy)
+2.1.c
+We implement crash triggering using special crash codes sent in the offset field on an RPC. These allow us to put crash points at almost any point in the server code, which can be triggered by a client. The crash codes were designed to not overlap with real offsets. See line 8 of simple_test_crash.c for an example setting up the crash code and lines 467-468 in server.cpp for the associated crash point. The crash codes are checked and the process is crashed in the check_crash function in server.cpp. This function also sets the offset to 0 in the case that it was a code for a different crash point. This way we do not get accidental crashes due to invalid offsets.
+
+(Performance)
+2.2.a and c
+The following files were used to benchmark performance for 2.2.a and 2.2.c
+continuous_write_read.c
+single_client_benchmark.c
+Data
+
+2.2.b
+Server startup & recovery phase timing was measured using a timed version of our server, in server_timed.cpp. Replaying logs of different sizes was accomplished using different offset ranges in data_overlap_test.c. Data
+
+
+(Presentation)
+3.1 - ./slide.pdf
+
+(Report)
+3.2 - ./report.pdf
+
+(Source Code)
+3.3 - ./Replicated-Block-Store
